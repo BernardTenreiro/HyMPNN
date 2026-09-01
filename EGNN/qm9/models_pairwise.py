@@ -836,7 +836,29 @@ class HybridEGNN(nn.Module):
 
         # Pairwise layers after
         for i in range(n_pairwise_layers):
-            self.add_module(f"pairwise_{i}", pairwise_layer_class(pairwise_nf, act_fn))
+
+            if pairwise_layer_type == 'egcl':
+                pairwise_layer = pairwise_layer_class(
+                input_nf=pairwise_nf,
+                output_nf=pairwise_nf,
+                hidden_nf=pairwise_nf,
+                edges_in_d=in_edge_nf,
+                nodes_attr_dim=n_node_attr,
+                act_fn=act_fn,
+                recurrent=True,
+                attention=attention
+            )
+
+            else:
+                pairwise_layer = pairwise_layer_class(
+                pairwise_nf,
+                act_fn
+                )
+
+            self.add_module(
+                f"pairwise_{i}",
+                pairwise_layer
+                )
 
         self.node_dec = nn.Sequential(
             nn.Linear(pairwise_nf, pairwise_nf),
@@ -886,9 +908,37 @@ class HybridEGNN(nn.Module):
         h = self.hidden_to_pairwise(h)
 
         # FIX: index pairwise entries starting at n_standard_layers, not 0
+        # Pairwise layers
         for i in range(self.n_pairwise_layers):
-            sparse_rows, sparse_cols, _ = sparse_edges_per_layer[self.n_standard_layers + i]
-            h = self._modules[f"pairwise_{i}"](h, x, sparse_rows, sparse_cols)
+
+            sparse_rows, sparse_cols, _ = sparse_edges_per_layer[
+            self.n_standard_layers + i
+            ]
+
+            if self.pairwise_layer_type == 'egcl':
+
+                if self.node_attr:
+                    h = self._modules[f"pairwise_{i}"](
+                    h,
+                    x,
+                    sparse_rows,
+                    sparse_cols,
+                    node_attr=h0)
+                    
+                else:
+                    h = self._modules[f"pairwise_{i}"](
+                    h,
+                    x,
+                    sparse_rows,
+                    sparse_cols,
+                    node_attr=None)
+
+            else:
+                h = self._modules[f"pairwise_{i}"](
+                h,
+                x,
+                sparse_rows,
+                sparse_cols)
 
         h = self.node_dec(h)
         # node_mask must be (total_nodes, 1) to broadcast correctly over hidden_nf

@@ -1,3 +1,7 @@
-python -u main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name eh_hybrid_10_64 --epochs 900 --batch_size 128 --nf 128 --nf_sparse 64 --n_layers 10 --n_standard_layers 5 --n_pairwise_layers 5 --hybrid
-python -u maicn_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name eh_standard_5_128 --epochs 900 --batch_size 128 --nf 128 --n_layers 5
-python -u main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name eh_standard_5_64 --epochs 900 --batch_size 128 --nf 64 --n_layers 5
+python -u EGNN/main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name 1 --epochs 1 --batch_size 128 --nf 128 --nf_sparse 64 --n_layers 10 --n_standard_layers 5 --n_pairwise_layers 5 --hybrid --pairwise_layer_type sym_asym
+python -u EGNN/main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name 2 --epochs 1 --batch_size 128 --nf 128 --nf_sparse 64 --n_layers 10 --n_standard_layers 5 --n_pairwise_layers 5 --hybrid --pairwise_layer_type egcl
+python -u EGNN/main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name 3 --epochs 1 --batch_size 128 --nf 128 --nf_sparse 64 --n_layers 10 --n_standard_layers 5 --n_pairwise_layers 5 --hybrid --pairwise_layer_type symmetric
+python -u EGNN/main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name 4 --epochs 1 --batch_size 128 --nf 128 --nf_sparse 64 --n_layers 10 --n_standard_layers 5 --n_pairwise_layers 5 --hybrid --pairwise_layer_type joint
+
+python -u EGNN/main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name 5 --epochs 1 --batch_size 128 --nf 128 --n_layers 5
+python -u EGNN/main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name 6 --epochs 1 --batch_size 128 --nf 64 --n_layers 5
