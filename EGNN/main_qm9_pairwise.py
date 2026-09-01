@@ -9,7 +9,7 @@ import utils
 import json
 import time
 
-# python -u EGNN/main_qm9.py --num_workers 0 --lr 5e-4 --property alpha --exp_name exp_1_alpha --epochs 1 --batch_size 8
+# python -u EGNN/main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property alpha --exp_name exp_1_alpha --epochs 1 --batch_size 8 --train_fraction 0.01
 
 parser = argparse.ArgumentParser(description='QM9 Example')
 parser.add_argument('--exp_name', type=str, default='exp_1')
