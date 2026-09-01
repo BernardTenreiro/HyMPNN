@@ -35,6 +35,11 @@ parser.add_argument('--node_attr', type=int, default=0)
 parser.add_argument('--weight_decay', type=float, default=1e-16)
  
 # --- Model selection ---
+parser.add_argument(
+    '--pairwise_layer_type',
+    type=str,
+    default='sym_asym',
+    choices=['sym_asym', 'egcl', 'symmetric', 'joint'])
 parser.add_argument('--pairwise', action='store_true', default=False,
                     help='Use PairwiseEGNN (joint update)')
 parser.add_argument('--sparse', action='store_true', default=False,
@@ -150,12 +155,14 @@ elif args.hybrid:
         attention=args.attention,
         node_attr=args.node_attr,
         frame_ordering=args.frame_ordering,
-        frame_scoring=args.frame_scoring)
+        frame_scoring=args.frame_scoring,
+        pairwise_layer_type=args.pairwise_layer_type)
 
     model_name = 'HybridEGNN'
 
     hidden_nf_used = args.nf
     print(f"Model: HybridEGNN | standard_layers={args.n_standard_layers} | "
+      f"pairwise_layer_type={args.pairwise_layer_type} | "
       f"pairwise_layers={args.n_pairwise_layers} | total={n_sparse_layers} | "
       f"ordering={args.frame_ordering} | scoring={args.frame_scoring} | "
       f"hidden_nf={args.nf} | pairwise_nf={pairwise_nf} | "

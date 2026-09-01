@@ -635,7 +635,7 @@ class PairwiseSymmetricLayer(nn.Module):
 # !!!It is possible to use less NN calls for more speedup. Do not need message and update NNs, since no aggregation.!!!
 # !!!Need to edit pairwise nn, it uses the same dimension for standard and pairwise.!!!
 
-class PairwiseUpdateLayer(nn.Module):
+class PairwiseSymAsymLayer(nn.Module):
     """
     Both endpoints update simultaneously from the same pre-update state:
         h_s = h_i + h_j                    (symmetric)
@@ -650,7 +650,7 @@ class PairwiseUpdateLayer(nn.Module):
     """
 
     def __init__(self, hidden_nf, act_fn=nn.SiLU()):
-        super(PairwiseUpdateLayer, self).__init__()
+        super(PairwiseSymAsymLayer, self).__init__()
         self.hidden_nf = hidden_nf
 
         # f_s: symmetric MLP. Input: h_s + |h_d| + radial = 2*hidden_nf + 1
@@ -711,7 +711,7 @@ class PairwiseUpdateLayer(nn.Module):
 class PairwiseEGNN(nn.Module):
     """
     EGNN variant using pairwise joint updates instead of standard MP.
-    Uses the same coloring/scheduling infrastructure but with PairwiseUpdateLayer.
+    Uses the same coloring/scheduling infrastructure but with PairwiseSymAsymLayer.
     """
 
     def __init__(self, in_node_nf, in_edge_nf, hidden_nf, device='cpu',
@@ -730,7 +730,7 @@ class PairwiseEGNN(nn.Module):
 
         self.embedding = nn.Linear(in_node_nf, hidden_nf)
         for i in range(n_layers):
-            self.add_module(f"pairwise_{i}", PairwiseUpdateLayer(hidden_nf, act_fn))
+            self.add_module(f"pairwise_{i}", PairwiseSymAsymLayer(hidden_nf, act_fn))
 
         self.node_dec = nn.Sequential(
             nn.Linear(hidden_nf, hidden_nf), act_fn,
@@ -780,11 +780,13 @@ class HybridEGNN(nn.Module):
     def __init__(self, in_node_nf, in_edge_nf, hidden_nf, pairwise_nf, device='cpu',
                  act_fn=nn.SiLU(), n_standard_layers=5, n_pairwise_layers=3,
                  coords_weight=1.0, attention=False, node_attr=1,
-                 frame_ordering='sort_repeat', frame_scoring='atomic_number'):
+                 frame_ordering='sort_repeat', frame_scoring='atomic_number', 
+                 pairwise_layer_type='sym_asym'):
         super(HybridEGNN, self).__init__()
 
         self.hidden_nf = hidden_nf
         self.pairwise_nf = pairwise_nf
+        self.pairwise_layer_type = pairwise_layer_type
         self.device = device
         self.n_standard_layers = n_standard_layers
         self.n_pairwise_layers = n_pairwise_layers
@@ -818,9 +820,23 @@ class HybridEGNN(nn.Module):
         else:
             self.hidden_to_pairwise = nn.Identity()
 
+        # Select pairwise layer architecture
+        pairwise_layer_types = {
+        'sym_asym': PairwiseSymAsymLayer,
+        'egcl': PairwiseEGCL,
+        'symmetric': PairwiseSymmetricLayer,
+        'joint': PairwiseJointLayer}
+
+        if pairwise_layer_type not in pairwise_layer_types:
+            raise ValueError(
+            f"Unknown pairwise_layer_type: {pairwise_layer_type}. "
+            f"Choose from {list(pairwise_layer_types.keys())}.")
+
+        pairwise_layer_class = pairwise_layer_types[pairwise_layer_type]
+
         # Pairwise layers after
         for i in range(n_pairwise_layers):
-            self.add_module(f"pairwise_{i}", PairwiseUpdateLayer(pairwise_nf, act_fn))
+            self.add_module(f"pairwise_{i}", pairwise_layer_class(pairwise_nf, act_fn))
 
         self.node_dec = nn.Sequential(
             nn.Linear(pairwise_nf, pairwise_nf),
