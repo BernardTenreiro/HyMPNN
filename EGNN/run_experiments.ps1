@@ -1,0 +1,3 @@
+python -u main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name eh_hybrid_10_64 --epochs 900 --batch_size 128 --nf 128 --nf_sparse 64 --n_layers 10 --n_standard_layers 5 --n_pairwise_layers 5 --hybrid
+python -u maicn_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name eh_standard_5_128 --epochs 900 --batch_size 128 --nf 128 --n_layers 5
+python -u main_qm9_pairwise.py --num_workers 0 --lr 5e-4 --property homo --exp_name eh_standard_5_64 --epochs 900 --batch_size 128 --nf 64 --n_layers 5
