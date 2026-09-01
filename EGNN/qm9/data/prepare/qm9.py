@@ -136,10 +136,10 @@ def gen_splits_gdb9(gdb9dir, cleanup=True):
 
     splits = {'train': train, 'valid': valid, 'test': test}
 
-    # Lower samples just for testing.
+    '''# Lower samples just for testing.
     splits['train'] = splits['train'][:300]
     splits['valid'] = splits['valid'][:300]
-    splits['test'] = splits['test'][:300]
+    splits['test'] = splits['test'][:300]'''
 
     # Cleanup
     cleanup_file(gdb9_txt_excluded, cleanup)
