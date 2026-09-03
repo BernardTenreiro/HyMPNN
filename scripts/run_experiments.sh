@@ -27,8 +27,13 @@ PYTHON="${PYTHON:-python}"
 LOG_DIR="$REPO_ROOT/logs"
 mkdir -p "$LOG_DIR"
 START_EXPERIMENT="${START_EXPERIMENT:-1}"
+END_EXPERIMENT="${END_EXPERIMENT:-12}"
 if [[ ! "$START_EXPERIMENT" =~ ^[0-9]+$ ]] || (( START_EXPERIMENT < 1 || START_EXPERIMENT > 12 )); then
     echo "START_EXPERIMENT must be an integer from 1 through 12" >&2
+    exit 2
+fi
+if [[ ! "$END_EXPERIMENT" =~ ^[0-9]+$ ]] || (( END_EXPERIMENT < START_EXPERIMENT || END_EXPERIMENT > 12 )); then
+    echo "END_EXPERIMENT must be an integer from START_EXPERIMENT through 12" >&2
     exit 2
 fi
 EXPERIMENT_INDEX=0
@@ -52,6 +57,9 @@ run() {
 
     if (( EXPERIMENT_INDEX < START_EXPERIMENT )); then
         echo "[$(date -Is)] [$EXPERIMENT_INDEX/12] $name -> skipped by START_EXPERIMENT"
+        return 0
+    fi
+    if (( EXPERIMENT_INDEX > END_EXPERIMENT )); then
         return 0
     fi
     if [[ -f "$metrics" ]] && grep -q '"completed": true' "$metrics"; then
