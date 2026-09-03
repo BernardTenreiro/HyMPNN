@@ -1,4 +1,4 @@
-"""Bucketed CUDA graph execution for HybridEGNN training.
+"""Bucketed CUDA graph execution for EGNN and HybridEGNN training.
 
 QM9 batches have a small set of node counts but variable dense and sparse edge
 counts. Each bucket preserves the real batch, appends one masked scratch graph,
@@ -98,7 +98,7 @@ class _GraphBucket:
 
 
 class BucketedCudaGraphRunner:
-    """Lazily capture and replay fixed-capacity HybridEGNN training steps."""
+    """Lazily capture and replay fixed-capacity model training steps."""
 
     def __init__(
         self,

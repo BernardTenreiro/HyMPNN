@@ -191,7 +191,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cuda-graphs",
         "--cuda_graphs",
         action="store_true",
-        help="Use bounded shape-bucketed CUDA graphs for HyEGNN training",
+        help="Use bounded shape-bucketed CUDA graphs for the complete training step",
     )
     return parser
 
@@ -227,31 +227,26 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--amp requires CUDA")
     if (args.fused_dense or args.fused_pairwise or args.fused_adam) and not cuda_enabled:
         parser.error("fused CUDA options require CUDA")
-    if args.fused_dense and args.pairwise:
-        parser.error("--fused-dense is not applicable to PairwiseEGNN")
+    if args.fused_dense and (args.pairwise or args.sparse):
+        parser.error("--fused-dense is only applicable to EGNN and HybridEGNN")
     if args.fused_pairwise and not (
         args.hybrid and args.n_pairwise_layers > 0 and args.pairwise_layer_type == "sym_asym"
     ):
         parser.error("--fused-pairwise requires HybridEGNN with sym_asym layers")
-    if args.cuda_graphs and not (
-        cuda_enabled
-        and args.hybrid
-        and args.fused_dense
-        and args.fused_pairwise
-        and args.fused_adam
-        and args.pairwise_layer_type == "sym_asym"
-    ):
-        parser.error(
-            "--cuda-graphs requires CUDA, HybridEGNN, --fused-dense, "
-            "--fused-pairwise, --fused-adam, and sym_asym layers"
-        )
+    if args.cuda_graphs and not (cuda_enabled and args.fused_dense and args.fused_adam):
+        parser.error("--cuda-graphs requires CUDA, --fused-dense, and --fused-adam")
+    if args.cuda_graphs and (args.pairwise or args.sparse):
+        parser.error("--cuda-graphs is only supported for EGNN and HybridEGNN")
 
 
 def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
     uses_sparse_edges = args.pairwise or args.sparse or args.hybrid
-    sparse_layer_count = (
-        args.n_standard_layers + args.n_pairwise_layers if args.hybrid else args.n_layers
-    )
+    if args.hybrid:
+        sparse_layer_count = args.n_standard_layers + args.n_pairwise_layers
+    elif args.pairwise or args.sparse:
+        sparse_layer_count = args.n_layers
+    else:
+        sparse_layer_count = 0
     pairwise_features = args.nf_sparse if args.nf_sparse is not None else args.nf
 
     shared_options = {
@@ -869,14 +864,14 @@ def run_experiment(
             mean=target_mean,
             mean_absolute_deviation=target_deviation,
             sparse_layer_count=model_info.sparse_layer_count,
-            sparse_start=args.n_standard_layers,
+            sparse_start=args.n_standard_layers if args.hybrid else 0,
             amp=args.amp,
         )
         if args.cuda_graphs
         else None
     )
     if graph_runner is not None:
-        print("Using bucketed CUDA graphs for complete HyEGNN training steps")
+        print("Using bucketed CUDA graphs for complete model training steps")
 
     output_directory = args.output_directory / args.exp_name
     output_directory.mkdir(parents=True, exist_ok=True)

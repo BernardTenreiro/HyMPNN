@@ -70,8 +70,11 @@ Optimized 5+5 HyEGNN:
   --cuda-graphs
 ```
 
-`--cuda-graphs` requires the fused options above. Graph capture is limited to
-common batch shapes; uncommon shapes safely fall back to eager execution.
+`--cuda-graphs` requires `--fused-dense` and `--fused-adam`. It supports both
+EGNN and HybridEGNN, including the `egcl`, `symmetric`, and `joint` pairwise
+ablations. The `sym_asym` model additionally supports `--fused-pairwise`.
+Graph capture is limited to common batch shapes; uncommon shapes safely fall
+back to eager execution.
 
 Run the full 12-experiment matrix with:
 
