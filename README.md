@@ -79,6 +79,15 @@ Run the full 12-experiment matrix with:
 PYTHON="$PYTHON" bash scripts/run_experiments.sh
 ```
 
+The sweep skips runs whose `metrics.json` contains `"completed": true`, so it
+can safely resume after a scheduler timeout. Set `START_EXPERIMENT=N` to skip
+directly to a numbered run, or submit the 48-hour H200 launcher from the
+repository root:
+
+```bash
+sbatch scripts/slurm/run_experiments.sh
+```
+
 Every experiment writes its console output to `logs/<name>/train.log` and its
 structured results to `logs/<name>/metrics.json`.
 

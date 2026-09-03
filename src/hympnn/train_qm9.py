@@ -453,6 +453,7 @@ def build_architecture_record(
 
 def create_results(precompute_seconds: float, use_sparse: bool, use_graphs: bool) -> dict:
     results = {
+        "completed": False,
         "epochs": [],
         "losses": [],
         "test_mae": [],
@@ -781,6 +782,10 @@ def run_training(
             results["cuda_graph_eager_fallbacks"] = context.graph_runner.eager_fallback_count
         with result_path.open("w", encoding="utf-8") as output_file:
             json.dump(results, output_file, indent=4)
+
+    results["completed"] = True
+    with result_path.open("w", encoding="utf-8") as output_file:
+        json.dump(results, output_file, indent=4)
 
 
 def run_experiment(
