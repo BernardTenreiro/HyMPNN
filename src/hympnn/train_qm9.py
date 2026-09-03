@@ -26,7 +26,7 @@ from .data.qm9.edge_scheduling import (
     assemble_batch_sparse_edges,
     precompute_molecule_colorings,
 )
-from .models.egnn import EGNN, HybridEGNN, PairwiseEGNN, SparseEGNN
+from .models.egnn import EGNN, HybridEGNN
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_OUTPUT_DIRECTORY = REPOSITORY_ROOT / "logs"
@@ -43,6 +43,19 @@ class ModelInfo:
     uses_sparse_edges: bool
 
 
+@dataclass(frozen=True)
+class ExecutionProfile:
+    """The single production execution path used by the trainer."""
+
+    name: str = "optimized_cuda_default"
+    amp: bool = False
+    tf32: bool = True
+    fused_dense: bool = True
+    fused_pairwise: bool = False
+    fused_adam: bool = True
+    cuda_graphs: bool = True
+
+
 @dataclass
 class TrainingContext:
     args: argparse.Namespace
@@ -55,7 +68,8 @@ class TrainingContext:
     target_mean: Tensor | float
     target_deviation: Tensor | float
     coloring_cache: Any
-    graph_runner: BucketedCudaGraphRunner | None
+    graph_runner: BucketedCudaGraphRunner
+    execution: ExecutionProfile
 
 
 class PhaseProfiler:
@@ -103,9 +117,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     training = parser.add_argument_group("training")
     training.add_argument("--exp-name", "--exp_name", default="exp_1")
-    training.add_argument("--batch-size", "--batch_size", type=int, default=96)
-    training.add_argument("--epochs", type=int, default=1)
-    training.add_argument("--no-cuda", "--no_cuda", action="store_true")
+    training.add_argument("--batch-size", "--batch_size", type=int, default=128)
+    training.add_argument("--epochs", type=int, default=1000)
     training.add_argument("--seed", type=int, default=1)
     training.add_argument("--log-interval", "--log_interval", type=int, default=20)
     training.add_argument("--test-interval", "--test_interval", type=int, default=1)
@@ -116,22 +129,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=DEFAULT_OUTPUT_DIRECTORY,
     )
-    training.add_argument("--lr", type=float, default=1e-3)
+    training.add_argument("--lr", type=float, default=5e-4)
     training.add_argument("--weight-decay", "--weight_decay", type=float, default=1e-16)
     training.add_argument("--property", default="homo")
-    training.add_argument("--num-workers", "--num_workers", type=int, default=0)
+    training.add_argument("--num-workers", "--num_workers", type=int, default=8)
     training.add_argument("--train-fraction", "--train_fraction", type=float, default=1.0)
 
     model = parser.add_argument_group("model")
     model.add_argument("--nf", type=int, default=128)
-    model.add_argument("--nf-sparse", "--nf_sparse", type=int)
+    model.add_argument("--nf-sparse", "--nf_sparse", type=int, default=64)
     model.add_argument("--attention", type=int, default=1)
     model.add_argument("--n-layers", "--n_layers", type=int, default=10)
     model.add_argument("--charge-power", "--charge_power", type=int, default=2)
     model.add_argument("--dataset-paper", "--dataset_paper", default="cormorant")
     model.add_argument("--node-attr", "--node_attr", type=int, default=0)
-    model.add_argument("--pairwise", action="store_true", help="Use PairwiseEGNN")
-    model.add_argument("--sparse", action="store_true", help="Use SparseEGNN")
     model.add_argument("--hybrid", action="store_true", help="Use HybridEGNN")
     model.add_argument(
         "--pairwise-layer-type",
@@ -165,40 +176,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     scheduling.add_argument("--use-vizing-coloring", "--use_vizing_coloring", action="store_true")
 
-    performance = parser.add_argument_group("performance")
-    performance.add_argument(
-        "--amp", action="store_true", help="Use bfloat16 autocast for forward and backward"
-    )
-    performance.add_argument(
-        "--tf32", action="store_true", help="Allow TF32 tensor-core matrix multiplications"
-    )
-    performance.add_argument(
-        "--fused-adam", "--fused_adam", action="store_true", help="Use fused Adam"
-    )
-    performance.add_argument(
-        "--fused-dense",
-        "--fused_dense",
-        action="store_true",
-        help="Use the fused dense EGNN CUDA extension",
-    )
-    performance.add_argument(
-        "--fused-pairwise",
-        "--fused_pairwise",
-        action="store_true",
-        help="Use the fused symmetric/asymmetric pairwise CUDA extension",
-    )
-    performance.add_argument(
-        "--cuda-graphs",
-        "--cuda_graphs",
-        action="store_true",
-        help="Use bounded shape-bucketed CUDA graphs for the complete training step",
-    )
     return parser
 
 
 def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    if sum((args.pairwise, args.sparse, args.hybrid)) > 1:
-        parser.error("only one of --pairwise, --sparse, and --hybrid may be selected")
     if not 0 < args.train_fraction <= 1:
         parser.error("--train-fraction must be in the interval (0, 1]")
 
@@ -222,31 +203,10 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if args.hybrid and args.n_standard_layers + args.n_pairwise_layers == 0:
         parser.error("a hybrid model must contain at least one layer")
 
-    cuda_enabled = torch.cuda.is_available() and not args.no_cuda
-    if args.amp and not cuda_enabled:
-        parser.error("--amp requires CUDA")
-    if (args.fused_dense or args.fused_pairwise or args.fused_adam) and not cuda_enabled:
-        parser.error("fused CUDA options require CUDA")
-    if args.fused_dense and (args.pairwise or args.sparse):
-        parser.error("--fused-dense is only applicable to EGNN and HybridEGNN")
-    if args.fused_pairwise and not (
-        args.hybrid and args.n_pairwise_layers > 0 and args.pairwise_layer_type == "sym_asym"
-    ):
-        parser.error("--fused-pairwise requires HybridEGNN with sym_asym layers")
-    if args.cuda_graphs and not (cuda_enabled and args.fused_dense and args.fused_adam):
-        parser.error("--cuda-graphs requires CUDA, --fused-dense, and --fused-adam")
-    if args.cuda_graphs and (args.pairwise or args.sparse):
-        parser.error("--cuda-graphs is only supported for EGNN and HybridEGNN")
-
 
 def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
-    uses_sparse_edges = args.pairwise or args.sparse or args.hybrid
-    if args.hybrid:
-        sparse_layer_count = args.n_standard_layers + args.n_pairwise_layers
-    elif args.pairwise or args.sparse:
-        sparse_layer_count = args.n_layers
-    else:
-        sparse_layer_count = 0
+    uses_sparse_edges = args.hybrid
+    sparse_layer_count = args.n_standard_layers + args.n_pairwise_layers if args.hybrid else 0
     pairwise_features = args.nf_sparse if args.nf_sparse is not None else args.nf
 
     shared_options = {
@@ -258,37 +218,7 @@ def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
         "node_attr": args.node_attr,
     }
 
-    if args.pairwise:
-        model = PairwiseEGNN(
-            hidden_nf=pairwise_features,
-            n_layers=args.n_layers,
-            frame_ordering=args.frame_ordering,
-            frame_scoring=args.frame_scoring,
-            **shared_options,
-        )
-        name = "PairwiseEGNN"
-        hidden_features = pairwise_features
-        description = (
-            f"Model: {name} | ordering={args.frame_ordering} | "
-            f"scoring={args.frame_scoring} | hidden_nf={hidden_features} | "
-            f"layers={args.n_layers}"
-        )
-    elif args.sparse:
-        model = SparseEGNN(
-            hidden_nf=pairwise_features,
-            n_layers=args.n_layers,
-            frame_ordering=args.frame_ordering,
-            frame_scoring=args.frame_scoring,
-            **shared_options,
-        )
-        name = "SparseEGNN"
-        hidden_features = pairwise_features
-        description = (
-            f"Model: {name} | ordering={args.frame_ordering} | "
-            f"scoring={args.frame_scoring} | hidden_nf={hidden_features} | "
-            f"layers={args.n_layers}"
-        )
-    elif args.hybrid:
+    if args.hybrid:
         model = HybridEGNN(
             hidden_nf=args.nf,
             pairwise_nf=pairwise_features,
@@ -328,33 +258,39 @@ def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
     )
 
 
-def install_fused_layers(args: argparse.Namespace, model_info: ModelInfo) -> None:
-    if not (args.fused_dense or args.fused_pairwise):
-        return
+def default_execution_profile(args: argparse.Namespace) -> ExecutionProfile:
+    return ExecutionProfile(
+        fused_pairwise=(
+            args.hybrid and args.n_pairwise_layers > 0 and args.pairwise_layer_type == "sym_asym"
+        )
+    )
 
-    if args.fused_dense:
-        from .cuda import FusedMaskedEquivariantGraphConvolution
 
-        compressed_edges = "HYMPNN_DISABLE_EDGE_COMPRESSION" not in os.environ
-        compressed_edges &= "EGNN_BASELINE" not in os.environ
-        dense_layer_count = args.n_standard_layers if args.hybrid else args.n_layers
-        for layer_index in range(dense_layer_count):
-            layer_name = f"gcl_{layer_index}"
-            eager_layer = model_info.model._modules[layer_name]
-            model_info.model._modules[layer_name] = (
-                FusedMaskedEquivariantGraphConvolution(
-                    model_info.hidden_features,
-                    model_info.hidden_features,
-                    model_info.hidden_features,
-                    attention=bool(args.attention),
-                    mask_is_ones=compressed_edges,
-                )
-                .to(next(model_info.model.parameters()).device)
-                .load_from(eager_layer)
+def install_optimized_layers(
+    args: argparse.Namespace,
+    model_info: ModelInfo,
+    execution: ExecutionProfile,
+) -> None:
+    from .cuda import FusedMaskedEquivariantGraphConvolution
+
+    dense_layer_count = args.n_standard_layers if args.hybrid else args.n_layers
+    for layer_index in range(dense_layer_count):
+        layer_name = f"gcl_{layer_index}"
+        eager_layer = model_info.model._modules[layer_name]
+        model_info.model._modules[layer_name] = (
+            FusedMaskedEquivariantGraphConvolution(
+                model_info.hidden_features,
+                model_info.hidden_features,
+                model_info.hidden_features,
+                attention=bool(args.attention),
+                mask_is_ones=True,
             )
-        print(f"Using fused dense CUDA layers for {dense_layer_count} layers")
+            .to(next(model_info.model.parameters()).device)
+            .load_from(eager_layer)
+        )
+    print(f"Using fused dense CUDA layers for {dense_layer_count} layers")
 
-    if args.fused_pairwise:
+    if execution.fused_pairwise:
         from .cuda import FusedSymmetricAsymmetricPairwiseLayer
         from .cuda.fused_pairwise_mlp import FusedSymmetricAsymmetricPairwiseMLP
 
@@ -394,7 +330,8 @@ def build_architecture_record(
     trainable_parameters: int,
     layer_parameters: dict[str, int],
     precompute_seconds: float,
-    graph_runner: BucketedCudaGraphRunner | None,
+    graph_runner: BucketedCudaGraphRunner,
+    execution: ExecutionProfile,
 ) -> dict[str, Any]:
     record = {
         "model_name": model_info.name,
@@ -415,20 +352,21 @@ def build_architecture_record(
         "charge_power": args.charge_power,
         "dataset_paper": args.dataset_paper,
         "seed": args.seed,
-        "pairwise": args.pairwise,
-        "sparse": args.sparse,
+        "pairwise": False,
+        "sparse": False,
         "hybrid": args.hybrid,
         "pairwise_layer_type": args.pairwise_layer_type,
         "frame_ordering": args.frame_ordering,
         "frame_scoring": args.frame_scoring,
         "use_vizing_coloring": args.use_vizing_coloring,
         "train_fraction": args.train_fraction,
-        "amp": args.amp,
-        "tf32": args.tf32,
-        "fused_dense": args.fused_dense,
-        "fused_pairwise": args.fused_pairwise,
-        "fused_adam": args.fused_adam,
-        "cuda_graphs": args.cuda_graphs,
+        "execution_profile": execution.name,
+        "amp": execution.amp,
+        "tf32": execution.tf32,
+        "fused_dense": execution.fused_dense,
+        "fused_pairwise": execution.fused_pairwise,
+        "fused_adam": execution.fused_adam,
+        "cuda_graphs": execution.cuda_graphs,
     }
     if args.hybrid:
         record.update(
@@ -440,13 +378,12 @@ def build_architecture_record(
         )
     if model_info.uses_sparse_edges:
         record["precompute_time"] = precompute_seconds
-    if graph_runner is not None:
-        record["cuda_graph_dense_quantum"] = graph_runner.dense_quantum
-        record["cuda_graph_max_buckets"] = graph_runner.max_buckets
+    record["cuda_graph_dense_quantum"] = graph_runner.dense_quantum
+    record["cuda_graph_max_buckets"] = graph_runner.max_buckets
     return record
 
 
-def create_results(precompute_seconds: float, use_sparse: bool, use_graphs: bool) -> dict:
+def create_results(precompute_seconds: float, use_sparse: bool) -> dict:
     results = {
         "completed": False,
         "epochs": [],
@@ -475,9 +412,8 @@ def create_results(precompute_seconds: float, use_sparse: bool, use_graphs: bool
     }
     if use_sparse:
         results["precompute_time"] = precompute_seconds
-    if use_graphs:
-        results["cuda_graph_captures"] = 0
-        results["cuda_graph_eager_fallbacks"] = 0
+    results["cuda_graph_captures"] = 0
+    results["cuda_graph_eager_fallbacks"] = 0
     return results
 
 
@@ -487,7 +423,6 @@ def run_epoch(
     args = context.args
     model = context.model_info.model
     is_training = partition == "train"
-    uses_graph = is_training and context.graph_runner is not None
     model.train(is_training)
 
     loss_values: list[Tensor] = []
@@ -519,9 +454,6 @@ def run_epoch(
         if profiler is not None:
             profiler.host_seconds["loader_wait"] += time.perf_counter() - previous_batch_end
             profiler.start("h2d_prep")
-        if is_training and not uses_graph:
-            context.optimizer.zero_grad()
-
         batch_size, node_count, _ = batch["positions"].size()
         positions = (
             batch["positions"]
@@ -539,21 +471,11 @@ def run_epoch(
             one_hot, charges, args.charge_power, context.charge_scale, context.device
         ).view(batch_size * node_count, -1)
 
-        if "dense_rows" in batch:
-            edges = (
-                batch["dense_rows"].to(context.device, non_blocking=True),
-                batch["dense_cols"].to(context.device, non_blocking=True),
-            )
-            dense_edge_mask = (
-                None if args.fused_dense else torch.ones(edges[0].size(0), 1, device=context.device)
-            )
-        else:
-            edges = tuple(
-                qm9_features.fully_connected_edges(node_count, batch_size, context.device)
-            )
-            dense_edge_mask = batch["edge_mask"].to(
-                context.device, torch.float32, non_blocking=True
-            )
+        edges = (
+            batch["dense_rows"].to(context.device, non_blocking=True),
+            batch["dense_cols"].to(context.device, non_blocking=True),
+        )
+        dense_edge_mask = None
         labels = batch[args.property].to(context.device, torch.float32, non_blocking=True)
 
         if profiler is not None:
@@ -585,8 +507,7 @@ def run_epoch(
             profiler.stop()
             profiler.start("forward")
 
-        if uses_graph:
-            assert context.graph_runner is not None
+        if is_training:
             loss, real_predictions = context.graph_runner.run_training_step(
                 nodes,
                 positions,
@@ -601,8 +522,8 @@ def run_epoch(
                 profiler.stop()
         else:
             with (
-                torch.set_grad_enabled(is_training),
-                torch.autocast("cuda", dtype=torch.bfloat16, enabled=args.amp),
+                torch.no_grad(),
+                torch.autocast("cuda", dtype=torch.bfloat16, enabled=context.execution.amp),
             ):
                 predictions = model(
                     h0=nodes,
@@ -618,25 +539,7 @@ def run_epoch(
                 profiler.stop()
 
             real_predictions = context.target_deviation * predictions + context.target_mean
-            if is_training:
-                if profiler is not None:
-                    profiler.start("loss")
-                loss = context.loss_function(
-                    predictions,
-                    (labels - context.target_mean) / context.target_deviation,
-                )
-                if profiler is not None:
-                    profiler.stop()
-                    profiler.start("backward")
-                loss.backward()
-                if profiler is not None:
-                    profiler.stop()
-                    profiler.start("optimizer")
-                context.optimizer.step()
-                if profiler is not None:
-                    profiler.stop()
-            else:
-                loss = context.loss_function(real_predictions, labels)
+            loss = context.loss_function(real_predictions, labels)
 
         if profiler is not None:
             profiler.start("metrics")
@@ -653,7 +556,7 @@ def run_epoch(
             ) * batch_size
             # Graph buckets reuse one output address, so clone values that a
             # later replay would otherwise overwrite.
-            loss_values.append(detached_loss.clone() if uses_graph else detached_loss)
+            loss_values.append(detached_loss.clone() if is_training else detached_loss)
 
         prefix = "" if is_training else f">> {partition}\t"
         if batch_index % args.log_interval == 0:
@@ -697,11 +600,7 @@ def run_training(
     precompute_seconds: float,
 ) -> None:
     args = context.args
-    results = create_results(
-        precompute_seconds,
-        context.model_info.uses_sparse_edges,
-        context.graph_runner is not None,
-    )
+    results = create_results(precompute_seconds, context.model_info.uses_sparse_edges)
     result_path = output_directory / "metrics.json"
     minimum_mse_improvement = 0.00005
 
@@ -772,9 +671,8 @@ def run_training(
 
         synchronize(context.device)
         results["total_time"] = time.perf_counter() - total_start_time
-        if context.graph_runner is not None:
-            results["cuda_graph_captures"] = context.graph_runner.capture_count
-            results["cuda_graph_eager_fallbacks"] = context.graph_runner.eager_fallback_count
+        results["cuda_graph_captures"] = context.graph_runner.capture_count
+        results["cuda_graph_eager_fallbacks"] = context.graph_runner.eager_fallback_count
         with result_path.open("w", encoding="utf-8") as output_file:
             json.dump(results, output_file, indent=4)
 
@@ -805,10 +703,16 @@ def run_experiment(
 
     target_mean, target_deviation = qm9_features.compute_mean_mad(dataloaders, args.property)
     model_info = build_model(args, device)
-    install_fused_layers(args, model_info)
-    if args.cuda_graphs:
-        replace_linear_layers_for_graph_capture(model_info.model)
-        print("Using graph-safe GEMM and bias linear layers")
+    execution = default_execution_profile(args)
+    print(
+        f"Execution profile: {execution.name} | tf32={execution.tf32} | "
+        f"fused_dense={execution.fused_dense} | "
+        f"fused_pairwise={execution.fused_pairwise} | "
+        f"fused_adam={execution.fused_adam} | cuda_graphs={execution.cuda_graphs}"
+    )
+    install_optimized_layers(args, model_info, execution)
+    replace_linear_layers_for_graph_capture(model_info.model)
+    print("Using graph-safe GEMM and bias linear layers")
 
     total_parameters, trainable_parameters, layer_parameters = parameter_counts(model_info.model)
     print(f"Parameters: {total_parameters:,} (trainable: {trainable_parameters:,})")
@@ -846,32 +750,27 @@ def run_experiment(
             dataloaders.update(rebuilt_dataloaders)
             print(f"Sparse edge assembly moved into {args.num_workers} DataLoader workers")
 
-    optimizer_learning_rate = torch.tensor(args.lr, device=device) if args.cuda_graphs else args.lr
+    optimizer_learning_rate = torch.tensor(args.lr, device=device)
     optimizer = optim.Adam(
         model_info.model.parameters(),
         lr=optimizer_learning_rate,
         weight_decay=args.weight_decay,
-        fused=args.fused_adam,
-        capturable=args.cuda_graphs,
+        fused=True,
+        capturable=True,
     )
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
     loss_function = nn.L1Loss()
-    graph_runner = (
-        BucketedCudaGraphRunner(
-            model=model_info.model,
-            optimizer=optimizer,
-            loss_function=loss_function,
-            mean=target_mean,
-            mean_absolute_deviation=target_deviation,
-            sparse_layer_count=model_info.sparse_layer_count,
-            sparse_start=args.n_standard_layers if args.hybrid else 0,
-            amp=args.amp,
-        )
-        if args.cuda_graphs
-        else None
+    graph_runner = BucketedCudaGraphRunner(
+        model=model_info.model,
+        optimizer=optimizer,
+        loss_function=loss_function,
+        mean=target_mean,
+        mean_absolute_deviation=target_deviation,
+        sparse_layer_count=model_info.sparse_layer_count,
+        sparse_start=args.n_standard_layers if args.hybrid else 0,
+        amp=execution.amp,
     )
-    if graph_runner is not None:
-        print("Using bucketed CUDA graphs for complete model training steps")
+    print("Using bucketed CUDA graphs for complete model training steps")
 
     output_directory = args.output_directory / args.exp_name
     output_directory.mkdir(parents=True, exist_ok=True)
@@ -883,6 +782,7 @@ def run_experiment(
         layer_parameters,
         precompute_seconds,
         graph_runner,
+        execution,
     )
     with (output_directory / "architecture.json").open("w", encoding="utf-8") as architecture_file:
         json.dump(architecture, architecture_file, indent=4)
@@ -899,6 +799,7 @@ def run_experiment(
         target_deviation=target_deviation,
         coloring_cache=coloring_cache,
         graph_runner=graph_runner,
+        execution=execution,
     )
     run_training(
         dataloaders,
@@ -913,13 +814,14 @@ def main() -> None:
     args = parser.parse_args()
     validate_args(parser, args)
 
-    args.cuda = torch.cuda.is_available() and not args.no_cuda
-    device = torch.device("cuda" if args.cuda else "cpu")
+    if not torch.cuda.is_available():
+        parser.error("the optimized training path requires an NVIDIA CUDA GPU")
+
+    device = torch.device("cuda")
     torch.manual_seed(args.seed)
-    if args.tf32:
-        torch.backends.cuda.matmul.allow_tf32 = True
-        torch.backends.cudnn.allow_tf32 = True
-        torch.set_float32_matmul_precision("high")
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
+    torch.set_float32_matmul_precision("high")
 
     args.output_directory.mkdir(parents=True, exist_ok=True)
     dataloaders, charge_scale = qm9_loaders.retrieve_dataloaders(args.batch_size, args.num_workers)

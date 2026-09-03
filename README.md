@@ -62,19 +62,16 @@ Optimized 5+5 HyEGNN:
   --n-pairwise-layers 5 \
   --nf 128 \
   --nf-sparse 64 \
-  --pairwise-layer-type sym_asym \
-  --tf32 \
-  --fused-dense \
-  --fused-pairwise \
-  --fused-adam \
-  --cuda-graphs
+  --pairwise-layer-type sym_asym
 ```
 
-`--cuda-graphs` requires `--fused-dense` and `--fused-adam`. It supports both
-EGNN and HybridEGNN, including the `egcl`, `symmetric`, and `joint` pairwise
-ablations. The `sym_asym` model additionally supports `--fused-pairwise`.
-Graph capture is limited to common batch shapes; uncommon shapes safely fall
-back to eager execution.
+The optimized CUDA execution profile is the trainer's only production path;
+it requires an NVIDIA CUDA GPU and has no performance opt-in flags. Every run
+automatically uses TF32, fused dense kernels, fused Adam, graph-safe GEMMs, and
+full-step CUDA graphs. A `sym_asym` HybridEGNN also selects the fused pairwise
+kernel automatically. Graph capture is limited to common batch shapes;
+uncommon shapes safely fall back to eager execution within the same optimized
+profile.
 
 Run the full 12-experiment matrix with:
 

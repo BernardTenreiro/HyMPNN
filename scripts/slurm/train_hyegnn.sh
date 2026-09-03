@@ -26,9 +26,4 @@ exec "$PYTHON" -u scripts/train_qm9.py \
     --nf 128 \
     --nf-sparse 64 \
     --pairwise-layer-type sym_asym \
-    --tf32 \
-    --fused-dense \
-    --fused-pairwise \
-    --fused-adam \
-    --cuda-graphs \
     "$@"

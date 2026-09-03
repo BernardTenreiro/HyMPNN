@@ -40,7 +40,7 @@ def _worker_options(worker_count: int) -> dict[str, Any]:
     return {
         "multiprocessing_context": "fork",
         "persistent_workers": True,
-        "pin_memory": not _environment_flag("HYMPNN_NO_PIN", "EGNN_NO_PIN"),
+        "pin_memory": True,
         "prefetch_factor": 4,
     }
 

@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import os
-
 import torch
 from torch import Tensor
 from torch.nn.utils.rnn import pad_sequence
@@ -24,7 +22,7 @@ def _drop_empty_columns(values: Tensor, columns_to_keep: Tensor) -> Tensor:
 
 
 def collate_batch(molecules: list[dict[str, Tensor]]) -> dict[str, Tensor]:
-    """Pad molecules, construct masks, and optionally compress dense edges."""
+    """Pad molecules, construct masks, and compress dense edges."""
     batch = {
         property_name: _stack([molecule[property_name] for molecule in molecules])
         for property_name in molecules[0]
@@ -41,11 +39,6 @@ def collate_batch(molecules: list[dict[str, Tensor]]) -> dict[str, Tensor]:
     edge_mask = atom_mask.unsqueeze(1) & atom_mask.unsqueeze(2)
     edge_mask &= ~torch.eye(node_count, dtype=torch.bool).unsqueeze(0)
     batch["edge_mask"] = edge_mask.reshape(batch_size * node_count * node_count, 1)
-
-    disable_compression = "HYMPNN_DISABLE_EDGE_COMPRESSION" in os.environ
-    disable_compression |= "EGNN_BASELINE" in os.environ
-    if disable_compression:
-        return batch
 
     kept_edges = edge_mask.reshape(-1).nonzero(as_tuple=True)[0]
     graph_indices = torch.div(kept_edges, node_count * node_count, rounding_mode="floor")

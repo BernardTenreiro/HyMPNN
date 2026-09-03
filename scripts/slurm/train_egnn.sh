@@ -22,7 +22,4 @@ exec "$PYTHON" -u scripts/train_qm9.py \
     --num-workers "${NUM_WORKERS:-8}" \
     --n-layers 5 \
     --nf 128 \
-    --tf32 \
-    --fused-dense \
-    --fused-adam \
     "$@"

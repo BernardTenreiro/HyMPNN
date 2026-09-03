@@ -38,18 +38,10 @@ if [[ ! "$END_EXPERIMENT" =~ ^[0-9]+$ ]] || (( END_EXPERIMENT < START_EXPERIMENT
 fi
 EXPERIMENT_INDEX=0
 
-# Flags shared by every run in the sweep.
-# --tf32        : tensor-core GEMMs (~1e-3 rel numerics; 1.27x on EGNN)
-# --fused-dense : shared dense CUDA kernels used by both model families
-# --fused-adam  : one Adam kernel instead of ~110 launches
-# --cuda-graphs : captures forward + backward + fused Adam for every model, so
-#                 all twelve runs receive the same full-step launch-overhead
-#                 optimization used by the primary HyEGNN experiments
-# sym_asym Hybrid runs additionally use their architecture-specific fused
-# pairwise CUDA kernel. Other pairwise architectures retain their distinct
-# equations inside the same full-step graph capture.
-COMMON=(--num-workers 8 --lr 5e-4 --property homo --epochs 1000 --batch-size 128
-        --tf32 --fused-dense --fused-adam --cuda-graphs)
+# TF32, fused dense kernels, fused Adam, graph-safe GEMMs, and full-step CUDA
+# graphs are mandatory trainer defaults. The sym_asym architecture selects its
+# fused pairwise kernel automatically; there are no performance opt-in flags.
+COMMON=()
 
 run() {
     local name="$1"; shift
@@ -92,8 +84,8 @@ run() {
 # --- Hybrid models: 5 standard EGNN layers + 5 pairwise layers ---------------
 HYBRID=(--nf-sparse 64 --n-layers 10 --n-standard-layers 5 --n-pairwise-layers 5 --hybrid)
 
-run has_128_64 --nf 128 "${HYBRID[@]}" --pairwise-layer-type sym_asym --fused-pairwise
-run has_64_64  --nf 64  "${HYBRID[@]}" --pairwise-layer-type sym_asym --fused-pairwise
+run has_128_64 --nf 128 "${HYBRID[@]}" --pairwise-layer-type sym_asym
+run has_64_64  --nf 64  "${HYBRID[@]}" --pairwise-layer-type sym_asym
 
 run he_128_64  --nf 128 "${HYBRID[@]}" --pairwise-layer-type egcl
 run he_64_64   --nf 64  "${HYBRID[@]}" --pairwise-layer-type egcl
