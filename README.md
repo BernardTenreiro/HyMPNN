@@ -1,26 +1,27 @@
 # HyMPNN
 
-HyMPNN contains EGNN and hybrid EGNN (HyEGNN) models for QM9, including CUDA
-optimizations that reduce the hybrid model's launch overhead on NVIDIA Hopper GPUs.
+HyMPNN provides EGNN and hybrid EGNN (HyEGNN) models for QM9, with fused CUDA
+kernels and bounded CUDA-graph capture to hide hybrid message-passing overhead
+on NVIDIA Hopper GPUs.
 
 ## Repository layout
 
-- `EGNN/main_qm9_pairwise.py` — QM9 training and evaluation entrypoint.
-- `EGNN/qm9/models_pairwise.py` — EGNN, sparse, pairwise, and hybrid model definitions.
-- `EGNN/qm9/cuda_graphs.py` — bounded, shape-bucketed CUDA graph runner.
-- `src/EGNN/` — fused dense EGNN CUDA extension.
-- `src/HyEGNN/` — fused symmetric/asymmetric pairwise CUDA extensions.
-- `EGNN/run_experiments.sh` — reproducible baseline and hybrid experiment sweep.
-- `EGNN/scripts/` — plotting and Slurm launch helpers.
+- `src/hympnn/` contains all reusable Python code and CUDA kernels.
+- `scripts/` contains training, plotting, experiment, and Slurm entrypoints.
+- `data/raw/qm9/` contains source data; `data/processed/qm9/` contains cached splits.
+- `logs/<experiment>/` contains metrics and console output for each run.
+- `docs/` contains historical benchmark results and project notes.
+
+The old top-level `EGNN/`, `src/EGNN/`, and `src/HyEGNN/` trees have been
+removed. Legacy demos and duplicate model implementations that were not part of
+the maintained QM9 training path were removed with them.
 
 ## Environment
 
-The training code requires Python, PyTorch with CUDA support, NumPy, NetworkX, and the
-dependencies used by the original EGNN QM9 implementation. The custom kernels are JIT
-compiled through `torch.utils.cpp_extension`, so CUDA Toolkit and Ninja must also be
-available. The current compiler flags target compute capability 9.0 (H100/H200).
-
-Set the CUDA toolkit and Python executable for your environment:
+The project requires Python 3.10+, PyTorch with CUDA support, NumPy, NetworkX,
+the CUDA Toolkit, and Ninja. The custom kernels are compiled on first use via
+PyTorch's JIT extension loader. The current compiler flags target compute
+capability 9.0 (H100/H200).
 
 ```bash
 export CUDA_HOME=/usr/local/cuda-13.1
@@ -28,14 +29,20 @@ export PATH="$CUDA_HOME/bin:$PATH"
 export PYTHON=/path/to/python
 ```
 
-The QM9 preparation code downloads and caches the dataset on first use.
+For an editable package install:
+
+```bash
+"$PYTHON" -m pip install -e .
+```
+
+The checkout entrypoint works without installing the package.
 
 ## Training
 
-A standard five-layer EGNN baseline:
+Standard five-layer EGNN:
 
 ```bash
-"$PYTHON" -u EGNN/main_qm9_pairwise.py \
+"$PYTHON" -u scripts/train_qm9.py \
   --exp-name egnn_baseline \
   --property homo \
   --batch-size 128 \
@@ -43,10 +50,10 @@ A standard five-layer EGNN baseline:
   --nf 128
 ```
 
-An optimized 5+5 HyEGNN run:
+Optimized 5+5 HyEGNN:
 
 ```bash
-"$PYTHON" -u EGNN/main_qm9_pairwise.py \
+"$PYTHON" -u scripts/train_qm9.py \
   --exp-name hyegnn_optimized \
   --property homo \
   --batch-size 128 \
@@ -63,29 +70,22 @@ An optimized 5+5 HyEGNN run:
   --cuda-graphs
 ```
 
-`--cuda-graphs` requires all of the fused options shown above. Graph capture is bounded
-to common batch shapes; uncommon shapes safely use the eager path. The bucket capacities
-can be tuned with `EGNN_GRAPH_DENSE_CAP`, `EGNN_GRAPH_DENSE_QUANTUM`,
-`EGNN_GRAPH_SPARSE_QUANTUM`, `EGNN_GRAPH_SPARSE_SMALL_CAP`,
-`EGNN_GRAPH_SPARSE_LARGE_CAP`, and `EGNN_GRAPH_MAX_BUCKETS`.
+`--cuda-graphs` requires the fused options above. Graph capture is limited to
+common batch shapes; uncommon shapes safely fall back to eager execution.
 
-For the full experiment matrix, run:
+Run the full 12-experiment matrix with:
 
 ```bash
-PYTHON="$PYTHON" bash EGNN/run_experiments.sh
+PYTHON="$PYTHON" bash scripts/run_experiments.sh
 ```
 
-Results are written beneath `EGNN/qm9/logs/<exp_name>/`. The historical
-`losess.json` filename and `losess` result key are retained for compatibility with
-existing experiment consumers.
+Every experiment writes its console output to `logs/<name>/train.log` and its
+structured results to `logs/<name>/metrics.json`.
 
 ## Code quality
-
-Python formatting and static checks are configured in `pyproject.toml`:
 
 ```bash
 uvx ruff format --check .
 uvx ruff check .
+bash -n scripts/*.sh scripts/slurm/*.sh
 ```
-
-Shell scripts can be syntax-checked with `bash -n`.
