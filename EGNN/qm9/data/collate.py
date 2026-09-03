@@ -1,3 +1,4 @@
+import os
 import torch
 
 
@@ -89,5 +90,24 @@ def collate_fn(batch):
     #edge_mask = atom_mask.unsqueeze(1) * atom_mask.unsqueeze(2)
     batch['edge_mask'] = edge_mask.view(batch_size * n_nodes * n_nodes, 1)
 
+    # Compressed dense edge index: only the edges the mask keeps.
+    #
+    # The full index from get_adj_matrix enumerates (b, i, j) in exactly this
+    # flattened order, so selecting the kept positions is the same as indexing
+    # that full list -- rows stay sorted ascending, which the segment-sum
+    # aggregation relies on. Padded atoms are ~53% of the dense edges and
+    # contribute exactly zero (edge_feat is multiplied by edge_mask), so
+    # dropping them changes only how many zero terms enter the scatter-add.
+    if os.environ.get('EGNN_BASELINE'):
+        return batch          # A/B switch: skip edge compression
+
+    flat = edge_mask.view(-1)
+    keep = flat.nonzero(as_tuple=True)[0]
+    b_idx = torch.div(keep, n_nodes * n_nodes, rounding_mode='floor')
+    rem = keep - b_idx * (n_nodes * n_nodes)
+    i_idx = torch.div(rem, n_nodes, rounding_mode='floor')
+    j_idx = rem - i_idx * n_nodes
+    batch['dense_rows'] = b_idx * n_nodes + i_idx
+    batch['dense_cols'] = b_idx * n_nodes + j_idx
 
     return batch

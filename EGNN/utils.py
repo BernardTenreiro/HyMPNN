@@ -1,9 +1,5 @@
 import os
-import matplotlib
-matplotlib.use('Agg')
 import torch
-import matplotlib.pyplot as plt
-from sklearn.manifold import TSNE
 
 def create_folders(args):
     try:
@@ -40,6 +36,12 @@ def normalize_res(res, keys=[]):
     return res
 
 def plot_coords(coords_mu, path, coords_logvar=None):
+    # matplotlib is only needed for plotting, so import it lazily: the training
+    # entrypoint imports this module but never plots.
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+
     if coords_mu is None:
         return 0
     if coords_logvar is not None:

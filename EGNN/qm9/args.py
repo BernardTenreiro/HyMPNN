@@ -1,6 +1,14 @@
 import argparse
+import os
 
 from math import inf
+
+# Processed .npz splits land in <DEFAULT_DATADIR>/qm9/.  This file is
+# EGNN/qm9/args.py, so EGNN/ is one level up -- resolving from __file__ means
+# the job can be launched from any working directory.  QM9_DATADIR overrides.
+DEFAULT_DATADIR = os.environ.get(
+    'QM9_DATADIR',
+    os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'data')))
 
 #### Argument parser ####
 
@@ -104,8 +112,8 @@ def setup_shared_args(parser):
     parser.add_argument('--predictdir', type=str, default='predict/',
                         help='Directory to place log and savefiles. (default: predict/)')
     # Directory to read and save data from
-    parser.add_argument('--datadir', type=str, default='qm9/temp',
-                        help='Directory to look up data from. (default: data/)')
+    parser.add_argument('--datadir', type=str, default=DEFAULT_DATADIR,
+                        help='Directory to look up data from. (default: EGNN/data)')
 
     # Dataset options
     parser.add_argument('--num-train', type=int, default=-1, metavar='N',

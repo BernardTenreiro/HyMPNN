@@ -12,6 +12,17 @@ import urllib.request
 from qm9.data.prepare.process import process_xyz_files, process_xyz_gdb9
 from qm9.data.prepare.utils import download_data, is_int, cleanup_file
 
+# Raw QM9 files (dsgdb9nsd.xyz.tar.bz2, uncharacterized.txt, optionally
+# atomref.txt) ship with the repo under EGNN/data.  This file lives at
+# EGNN/qm9/data/prepare/qm9.py, so EGNN/ is three levels up.  Resolving from
+# __file__ keeps everything working no matter what directory the job is
+# launched from; QM9_RAW_DIR overrides it.
+EGNN_ROOT = os.path.abspath(join(os.path.dirname(__file__), '..', '..', '..'))
+RAW_DATA_DIR = os.environ.get('QM9_RAW_DIR', join(EGNN_ROOT, 'data'))
+
+# Set QM9_SUBSET=<n> to truncate every split to n molecules (fast smoke tests).
+QM9_SUBSET = int(os.environ.get('QM9_SUBSET', '0'))
+
 
 def download_dataset_qm9(datadir, dataname, splits=None, calculate_thermo=True, exclude=True, cleanup=True):
     """
@@ -34,9 +45,12 @@ def download_dataset_qm9(datadir, dataname, splits=None, calculate_thermo=True, 
     # tardata = tarfile.open(gdb9_tar_file, 'r')
     # files = tardata.getmembers()
 
-    logging.info('Using existing local QM9 archive.')
-
-    gdb9_tar_data = r"C:\Users\bernt\OneDrive\Desktop\HyMPNN\qm9\raw\dsgdb9nsd.xyz.tar.bz2"
+    gdb9_tar_data = join(RAW_DATA_DIR, 'dsgdb9nsd.xyz.tar.bz2')
+    if not exists(gdb9_tar_data):
+        raise FileNotFoundError(
+            'QM9 archive not found at {}. Place dsgdb9nsd.xyz.tar.bz2 there or '
+            'set QM9_RAW_DIR.'.format(gdb9_tar_data))
+    logging.info('Using existing local QM9 archive: {}'.format(gdb9_tar_data))
 
     #urllib.request.urlretrieve(gdb9_url_data, filename=gdb9_tar_data)
     #logging.info('GDB9 dataset downloaded successfully!')
@@ -56,9 +70,15 @@ def download_dataset_qm9(datadir, dataname, splits=None, calculate_thermo=True, 
         # Download thermochemical energy from GDB9 dataset, and then process it into a dictionary
         therm_energy = get_thermo_dict(gdb9dir, cleanup)
 
-        # For each of train/validation/test split, add the thermochemical energy
-        for split_idx, split_data in gdb9_data.items():
-            gdb9_data[split_idx] = add_thermo_targets(split_data, therm_energy)
+        if therm_energy:
+            # For each of train/validation/test split, add the thermochemical energy
+            for split_idx, split_data in gdb9_data.items():
+                gdb9_data[split_idx] = add_thermo_targets(split_data, therm_energy)
+        else:
+            logging.warning(
+                'No atomref.txt available -- skipping thermochemical targets. '
+                'Properties homo/lumo/gap/alpha/mu/Cv-free targets are unaffected, '
+                'but zpve/U0/U/H/G/Cv will NOT have atomisation energies subtracted.')
 
     # Save processed GDB9 data into train/validation/test splits
     logging.info('Saving processed data:')
@@ -86,14 +106,20 @@ def gen_splits_gdb9(gdb9dir, cleanup=True):
     set.
     """
     logging.info('Splits were not specified! Automatically generating.')
-    gdb9_url_excluded = 'https://springernature.figshare.com/ndownloader/files/3195404'
-    gdb9_txt_excluded = join(gdb9dir, 'uncharacterized.txt')
-    urllib.request.urlretrieve(gdb9_url_excluded, filename=gdb9_txt_excluded)
 
-    dir = r"C:\Users\bernt\OneDrive\Desktop\HyMPNN\qm9\raw\uncharacterized.txt"
+    # Prefer the copy shipped in RAW_DATA_DIR; only hit figshare if it is absent.
+    gdb9_txt_excluded = join(RAW_DATA_DIR, 'uncharacterized.txt')
+    downloaded_excluded = None
+    if not exists(gdb9_txt_excluded):
+        gdb9_url_excluded = 'https://springernature.figshare.com/ndownloader/files/3195404'
+        downloaded_excluded = join(gdb9dir, 'uncharacterized.txt')
+        logging.info('uncharacterized.txt not found locally, downloading.')
+        urllib.request.urlretrieve(gdb9_url_excluded, filename=downloaded_excluded)
+        gdb9_txt_excluded = downloaded_excluded
+
     # First get list of excluded indices
     excluded_strings = []
-    with open(dir) as f:
+    with open(gdb9_txt_excluded) as f:
         lines = f.readlines()
         excluded_strings = [line.split()[0]
                             for line in lines if len(line.split()) > 0]
@@ -136,13 +162,16 @@ def gen_splits_gdb9(gdb9dir, cleanup=True):
 
     splits = {'train': train, 'valid': valid, 'test': test}
 
-    '''# Lower samples just for testing.
-    splits['train'] = splits['train'][:300]
-    splits['valid'] = splits['valid'][:300]
-    splits['test'] = splits['test'][:300]'''
+    # Lower samples just for testing (opt-in via QM9_SUBSET; full data by default).
+    if QM9_SUBSET > 0:
+        logging.warning('QM9_SUBSET=%d: truncating every split -- smoke test only!',
+                        QM9_SUBSET)
+        for key in splits:
+            splits[key] = splits[key][:QM9_SUBSET]
 
-    # Cleanup
-    cleanup_file(gdb9_txt_excluded, cleanup)
+    # Cleanup (only files we downloaded ourselves, never the repo's raw copy)
+    if downloaded_excluded is not None:
+        cleanup_file(downloaded_excluded, cleanup)
 
     return splits
 
@@ -154,12 +183,23 @@ def get_thermo_dict(gdb9dir, cleanup=True):
 
     Probably would be easier just to just precompute this and enter it explicitly.
     """
-    # Download thermochemical energy
-    logging.info('Downloading thermochemical energy.')
-    gdb9_url_thermo = 'https://springernature.figshare.com/ndownloader/files/3195395'
-    gdb9_txt_thermo = join(gdb9dir, 'atomref.txt')
-
-    urllib.request.urlretrieve(gdb9_url_thermo, filename=gdb9_txt_thermo)
+    # Prefer the copy shipped in RAW_DATA_DIR; only hit figshare if it is absent.
+    gdb9_txt_thermo = join(RAW_DATA_DIR, 'atomref.txt')
+    downloaded_thermo = None
+    if not exists(gdb9_txt_thermo):
+        gdb9_url_thermo = 'https://springernature.figshare.com/ndownloader/files/3195395'
+        downloaded_thermo = join(gdb9dir, 'atomref.txt')
+        logging.info('atomref.txt not found locally, attempting download.')
+        try:
+            urllib.request.urlretrieve(gdb9_url_thermo, filename=downloaded_thermo)
+        except Exception as err:
+            logging.warning('Could not download atomref.txt: %s', err)
+            return {}
+        if not exists(downloaded_thermo) or os.path.getsize(downloaded_thermo) == 0:
+            logging.warning('Downloaded atomref.txt is empty (figshare blocked?).')
+            cleanup_file(downloaded_thermo, cleanup)
+            return {}
+        gdb9_txt_thermo = downloaded_thermo
 
     # Loop over file of thermochemical energies
     therm_targets = ['zpve', 'U0', 'U', 'H', 'G', 'Cv']
@@ -183,8 +223,9 @@ def get_thermo_dict(gdb9dir, cleanup=True):
                 therm_energy[therm_target][id2charge[split[0]]
                                            ] = float(split_therm)
 
-    # Cleanup file when finished.
-    cleanup_file(gdb9_txt_thermo, cleanup)
+    # Cleanup file when finished (only if we downloaded it ourselves).
+    if downloaded_thermo is not None:
+        cleanup_file(downloaded_thermo, cleanup)
 
     return therm_energy
 

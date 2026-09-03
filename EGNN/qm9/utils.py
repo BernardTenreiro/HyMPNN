@@ -1,3 +1,4 @@
+import os
 import torch
 
 def compute_mean_mad(dataloaders, label_property):
@@ -9,24 +10,29 @@ def compute_mean_mad(dataloaders, label_property):
 
 edges_dic = {}
 def get_adj_matrix(n_nodes, batch_size, device):
-    if n_nodes in edges_dic:
-        edges_dic_b = edges_dic[n_nodes]
-        if batch_size in edges_dic_b:
-            return edges_dic_b[batch_size]
-        else:
-            # get edges for a single sample
-            rows, cols = [], []
-            for batch_idx in range(batch_size):
-                for i in range(n_nodes):
-                    for j in range(n_nodes):
-                        rows.append(i + batch_idx*n_nodes)
-                        cols.append(j + batch_idx*n_nodes)
+    """Fully-connected edge index for `batch_size` graphs of `n_nodes` nodes each.
 
-    else:
-        edges_dic[n_nodes] = {}
-        return get_adj_matrix(n_nodes, batch_size, device)
+    The result depends only on (n_nodes, batch_size, device), so it is built once
+    and reused.  The previous version never wrote into `edges_dic`, so every call
+    rebuilt batch_size * n_nodes**2 indices with nested Python loops.
 
-    edges = [torch.LongTensor(rows).to(device), torch.LongTensor(cols).to(device)]
+    The vectorised construction produces exactly the same index values in exactly
+    the same order as those loops (rows vary slowest, cols fastest, offset by
+    batch_idx * n_nodes), so results are bitwise unchanged.
+    """
+    key = (n_nodes, batch_size, str(device))
+    cached = None if os.environ.get('EGNN_BASELINE') else edges_dic.get(key)
+    if cached is not None:
+        return cached
+
+    base = torch.arange(n_nodes)
+    rows = base.view(-1, 1).expand(n_nodes, n_nodes).reshape(-1)
+    cols = base.view(1, -1).expand(n_nodes, n_nodes).reshape(-1)
+    offsets = (torch.arange(batch_size) * n_nodes).view(-1, 1)
+
+    edges = [(rows.view(1, -1) + offsets).reshape(-1).to(device),
+             (cols.view(1, -1) + offsets).reshape(-1).to(device)]
+    edges_dic[key] = edges
     return edges
 
 def preprocess_input(one_hot, charges, charge_power, charge_scale, device):

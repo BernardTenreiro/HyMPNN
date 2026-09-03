@@ -690,8 +690,10 @@ class PairwiseSymAsymLayer(nn.Module):
         h_s = h_i + h_j
         h_d = h_i - h_j
 
-        z_s = self.f_s(torch.cat([h_s, h_d.abs(), radial], dim=-1))
-        gate = self.f_d_gate(torch.cat([h_d.abs(), radial], dim=-1))
+        h_d_abs = h_d.abs()  # shared by f_s and f_d_gate; was computed twice
+
+        z_s = self.f_s(torch.cat([h_s, h_d_abs, radial], dim=-1))
+        gate = self.f_d_gate(torch.cat([h_d_abs, radial], dim=-1))
         z_d = h_d * gate
 
         h_i_new = h_i + z_s + z_d
@@ -794,7 +796,6 @@ class HybridEGNN(nn.Module):
         self.node_attr = node_attr
         self.frame_ordering = frame_ordering
         self.frame_scoring = frame_scoring
-
         self.register_buffer("mass_table", _build_mass_table())
 
         self.embedding = nn.Linear(in_node_nf, hidden_nf)
@@ -908,7 +909,6 @@ class HybridEGNN(nn.Module):
         h = self.hidden_to_pairwise(h)
 
         # FIX: index pairwise entries starting at n_standard_layers, not 0
-        # Pairwise layers
         for i in range(self.n_pairwise_layers):
 
             sparse_rows, sparse_cols, _ = sparse_edges_per_layer[
@@ -1303,8 +1303,16 @@ def precompute_molecule_colorings(
                 for layer_idx in range(n_layers):
                     color_idx = schedule[layer_idx]
                     mask = color_masks[color_idx]
-                    active_rows = local_rows_t[mask].contiguous()
-                    active_cols = local_cols_t[mask].contiguous()
+                    active_rows = local_rows_t[mask]
+                    active_cols = local_cols_t[mask]
+                    # One representative per undirected pair. The color masks
+                    # are over directed edges and (i,j),(j,i) always share a
+                    # color, so every symmetric pairwise update was redundantly
+                    # evaluated twice. Keeping row < col preserves both endpoint
+                    # updates and their gradients while halving this work.
+                    keep = active_rows < active_cols
+                    active_rows = active_rows[keep].contiguous()
+                    active_cols = active_cols[keep].contiguous()
                     layer_rows.append(active_rows)
                     layer_cols.append(active_cols)
                     layer_counts.append(int(active_rows.numel()))
@@ -1317,6 +1325,83 @@ def precompute_molecule_colorings(
 
     print(f"Precomputed colorings for {len(cache)} unique molecules")
     return cache
+
+
+def assemble_sparse_edges_cpu(coloring_cache, charges_batch, atom_mask_batch,
+                              n_nodes, n_layers, skip_first=0):
+    """Same edge assembly as :func:`assemble_batch_sparse_edges`, but returns CPU
+    tensors and never touches CUDA.
+
+    Split out so the work can run inside a DataLoader worker process (workers
+    must not initialise CUDA).  The (rows, cols) produced here are exactly the
+    tensors the GPU version would have produced, so results are unchanged.
+    """
+    if charges_batch.dim() == 3 and charges_batch.size(-1) == 1:
+        charges_batch = charges_batch.squeeze(-1)
+    batch_size = charges_batch.size(0)
+
+    groups: Dict[tuple, List[int]] = {}
+    for g in range(batch_size):
+        n_real = int(atom_mask_batch[g].sum().item())
+        if n_real < 2:
+            continue
+        cache_key = tuple(charges_batch[g, :n_real].long().view(-1).tolist())
+        if cache_key not in coloring_cache:
+            raise RuntimeError(f"Cache miss for charges={cache_key}")
+        groups.setdefault(cache_key, []).append(g)
+
+    # HybridEGNN reads slot n_standard_layers + i, so slots below that are never
+    # consumed. Building and shipping them was ~half the per-batch edge work.
+    per_layer_rows = [[] for _ in range(n_layers)]
+    per_layer_cols = [[] for _ in range(n_layers)]
+    for cache_key, graph_ids in groups.items():
+        cached = coloring_cache[cache_key]
+        offsets = torch.tensor(graph_ids, dtype=torch.long) * n_nodes
+        for layer_idx in range(skip_first, n_layers):
+            base_rows = cached["rows"][layer_idx]
+            base_cols = cached["cols"][layer_idx]
+            if base_rows.numel() == 0:
+                continue
+            per_layer_rows[layer_idx].append(
+                (base_rows.unsqueeze(0) + offsets.unsqueeze(1)).reshape(-1))
+            per_layer_cols[layer_idx].append(
+                (base_cols.unsqueeze(0) + offsets.unsqueeze(1)).reshape(-1))
+
+    out = []
+    for layer_idx in range(n_layers):
+        if per_layer_rows[layer_idx]:
+            rows = torch.cat(per_layer_rows[layer_idx], dim=0)
+            cols = torch.cat(per_layer_cols[layer_idx], dim=0)
+        else:
+            rows = torch.zeros(0, dtype=torch.long)
+            cols = torch.zeros(0, dtype=torch.long)
+        out.append((rows, cols))
+    return out
+
+
+class SparseEdgeCollate:
+    """collate_fn that also builds the per-layer sparse edge index in the worker.
+
+    Holding the coloring cache on the instance means each forked worker gets it
+    copy-on-write, so the per-batch edge assembly (~10 ms of pure Python on the
+    training loop's critical path) overlaps with GPU compute instead of blocking it.
+    """
+
+    def __init__(self, base_collate, coloring_cache, n_layers, skip_first=0):
+        self.base_collate = base_collate
+        self.coloring_cache = coloring_cache
+        self.n_layers = n_layers
+        self.skip_first = skip_first
+
+    def __call__(self, batch):
+        out = self.base_collate(batch)
+        n_nodes = out['charges'].size(1)
+        edges = assemble_sparse_edges_cpu(
+            self.coloring_cache, out['charges'], out['atom_mask'],
+            n_nodes, self.n_layers, self.skip_first)
+        out['sparse_rows'] = [r for r, _ in edges]
+        out['sparse_cols'] = [c for _, c in edges]
+        return out
 
 
 def assemble_batch_sparse_edges(
