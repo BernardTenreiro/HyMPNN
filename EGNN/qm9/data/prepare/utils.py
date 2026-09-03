@@ -1,8 +1,9 @@
-import os, logging
+import logging
+import os
 from urllib.request import urlopen
 
 
-def download_data(url, outfile='', binary=False):
+def download_data(url, outfile="", binary=False):
     """
     Downloads data from a URL and returns raw data.
 
@@ -20,22 +21,22 @@ def download_data(url, outfile='', binary=False):
         # Download url using urlopen
         with urlopen(url) as f:
             data = f.read()
-        logging.info('Data download success!')
+        logging.info("Data download success!")
         success = True
-    except:
-        logging.info('Data download failed!')
-        success = False
+    except OSError as error:
+        logging.info("Data download failed: %s", error)
+        return None, False
 
     if binary:
         # If data is binary, use 'wb' if outputting to file
-        writeflag = 'wb'
+        writeflag = "wb"
     else:
         # If data is string, convert to string and use 'w' if outputting to file
-        writeflag = 'w'
-        data = data.decode('utf-8')
+        writeflag = "w"
+        data = data.decode("utf-8")
 
     if outfile:
-        logging.info('Saving downloaded data to file: {}'.format(outfile))
+        logging.info("Saving downloaded data to file: {}".format(outfile))
 
         with open(outfile, writeflag) as f:
             f.write(data)
@@ -44,12 +45,13 @@ def download_data(url, outfile='', binary=False):
 
 
 # Check if a string can be converted to an int, without throwing an error.
-def is_int(str):
+def is_int(value):
     try:
-        int(str)
+        int(value)
         return True
-    except:
+    except (TypeError, ValueError):
         return False
+
 
 # Cleanup. Use try-except to avoid race condition.
 def cleanup_file(file, cleanup=True):

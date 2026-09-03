@@ -9,7 +9,7 @@ from torch.nn import Embedding, Linear
 from torch_geometric.nn import radius_graph
 from torch_geometric.utils import scatter
 
-#Atomic Mass Table for frame coloring
+# Atomic Mass Table for frame coloring
 _ATOMIC_MASS: Dict[int, float] = {
     1: 1.008,
     2: 4.003,
@@ -36,17 +36,19 @@ _ATOMIC_MASS: Dict[int, float] = {
 }
 _MAX_Z = 100
 
+
 def _build_mass_table(max_z: int = _MAX_Z) -> Tensor:
-    mass_table = torch.zeros(max_z+1, dtype=torch.float32)
+    mass_table = torch.zeros(max_z + 1, dtype=torch.float32)
     for z, mass in _ATOMIC_MASS.items():
         if z <= max_z:
             mass_table[z] = mass
-    for z in range(max_z+1):
+    for z in range(max_z + 1):
         if mass_table[z] == 0:
             mass_table[z] = float(z)
     return mass_table
 
-#Building blocks
+
+# Building blocks
 class ResidualLayer(nn.Module):
     def __init__(self, hidden_channels: int, act: Callable):
         super().__init__()
@@ -60,9 +62,12 @@ class ResidualLayer(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         return x + self.act(self.lin2(self.act(self.lin1(x))))
-    
+
+
 class EGNNMessageBlock(nn.Module):
-    def __init__(self, hidden_channels: int, edge_emb_dim: int, act: Callable, num_residual: int = 2):
+    def __init__(
+        self, hidden_channels: int, edge_emb_dim: int, act: Callable, num_residual: int = 2
+    ):
         super().__init__()
         self.act = act
         self.msg_mlp = nn.Sequential(
@@ -102,7 +107,8 @@ class EGNNMessageBlock(nn.Module):
             x = res(x)
         return x
 
-#Readout MLP: Node features -> per graph scalar
+
+# Readout MLP: Node features -> per graph scalar
 class ReadoutMLP(nn.Module):
     """Simple MLP that maps node embeddings to per-node scalars, then sums over the graph."""
 
@@ -118,19 +124,20 @@ class ReadoutMLP(nn.Module):
         self.net = nn.Sequential(*layers)
 
     def forward(self, x: Tensor, batch: Tensor) -> Tensor:
-        per_node = self.net(x)                                    # (N, out_channels)
-        out = scatter(per_node, batch, dim=0, reduce="sum")       # (B, out_channels)
+        per_node = self.net(x)  # (N, out_channels)
+        out = scatter(per_node, batch, dim=0, reduce="sum")  # (B, out_channels)
         return out
 
-#Activation helper
+
+# Activation helper
 def _resolve_activation(act: Union[str, Callable]) -> Callable:
     if callable(act):
         return act
     table: Dict[str, Callable] = {
         "swish": nn.SiLU(),
-        "silu":  nn.SiLU(),
-        "relu":  nn.ReLU(),
-        "tanh":  nn.Tanh(),
+        "silu": nn.SiLU(),
+        "relu": nn.ReLU(),
+        "tanh": nn.Tanh(),
         "identity": nn.Identity(),
     }
     key = act.lower()
@@ -138,7 +145,8 @@ def _resolve_activation(act: Union[str, Callable]) -> Callable:
         raise ValueError(f"Unsupported activation '{act}'.")
     return table[key]
 
-#Frame Ordering/ Edge Coloring
+
+# Frame Ordering/ Edge Coloring
 def node_scores_from_mode(z: Tensor, scoring: str, mass_table: Tensor) -> Tensor:
     if scoring == "atomic_number":
         return z.float()
@@ -154,6 +162,7 @@ def node_scores_from_mode(z: Tensor, scoring: str, mass_table: Tensor) -> Tensor
         mass[z == 1] = -1.0
         return mass
     raise ValueError(f"Unknown frame_scoring='{scoring}'.")
+
 
 def unique_undirected_pairs(edge_index: Tensor) -> Tuple[List[Tuple[int, int]], Tensor]:
     e_count = edge_index.size(1)
@@ -175,6 +184,7 @@ def unique_undirected_pairs(edge_index: Tensor) -> Tuple[List[Tuple[int, int]], 
 
     return pairs, edge_to_pair
 
+
 def greedy_pair_coloring(pairs: Sequence[Tuple[int, int]]) -> List[int]:
     colors = [-1] * len(pairs)
     node_to_pairs: Dict[int, List[int]] = {}
@@ -192,6 +202,7 @@ def greedy_pair_coloring(pairs: Sequence[Tuple[int, int]]) -> List[int]:
 
     return colors
 
+
 def directed_color_masks_from_undirected(edge_index: Tensor) -> List[Tensor]:
     pairs, edge_to_pair = unique_undirected_pairs(edge_index)
     if len(pairs) == 0:
@@ -201,6 +212,7 @@ def directed_color_masks_from_undirected(edge_index: Tensor) -> List[Tensor]:
     pair_colors_t = torch.tensor(pair_colors, dtype=torch.long, device=edge_index.device)
     edge_colors = pair_colors_t[edge_to_pair]
     return [(edge_colors == c) for c in range(num_colors)]
+
 
 def score_color_classes(
     edge_coloring: Sequence[Tensor],
@@ -218,6 +230,7 @@ def score_color_classes(
         scores.append((node_scores[dst] + node_scores[src]).mean().item())
     return scores
 
+
 def sandwich_order(sorted_colors: Sequence[int]) -> List[int]:
     out: List[int] = []
     lo, hi = 0, len(sorted_colors) - 1
@@ -232,6 +245,7 @@ def sandwich_order(sorted_colors: Sequence[int]) -> List[int]:
         take_low = not take_low
     return out
 
+
 def build_frame_schedule(
     edge_coloring: Sequence[Tensor],
     edge_index: Tensor,
@@ -242,9 +256,9 @@ def build_frame_schedule(
     mass_table: Tensor,
 ) -> List[int]:
     scoring_override = {
-        "sandwich_atomic":    "atomic_number",
-        "sandwich_mass":      "mass",
-        "sandwich_mass_noh":  "mass_noh",
+        "sandwich_atomic": "atomic_number",
+        "sandwich_mass": "mass",
+        "sandwich_mass_noh": "mass_noh",
         "sandwich_penalized_h": "penalized_h",
     }
     scoring = scoring_override.get(frame_ordering, frame_scoring)
@@ -268,7 +282,8 @@ def build_frame_schedule(
 
     return [base[t % len(base)] for t in range(num_blocks)]
 
-#Main model: EGnn with frame ordering and coloring
+
+# Main model: EGnn with frame ordering and coloring
 class SparseEGNN(nn.Module):
     """
     Sparse EGNN with frame-ordered edge coloring.
@@ -330,10 +345,12 @@ class SparseEGNN(nn.Module):
         )
 
         # Message-passing blocks (one per scheduled step)
-        self.mp_blocks = nn.ModuleList([
-            EGNNMessageBlock(hidden_channels, hidden_channels, act_fn, num_residual)
-            for _ in range(num_blocks)
-        ])
+        self.mp_blocks = nn.ModuleList(
+            [
+                EGNNMessageBlock(hidden_channels, hidden_channels, act_fn, num_residual)
+                for _ in range(num_blocks)
+            ]
+        )
 
         # Final readout MLP: h → scalar per node → sum per graph
         self.readout = ReadoutMLP(hidden_channels, out_channels, act_fn, num_readout_layers)
@@ -343,7 +360,7 @@ class SparseEGNN(nn.Module):
     # ------------------------------------------------------------------
     def _rbf(self, dist: Tensor) -> Tensor:
         """Gaussian radial basis: exp(-||d - c||^2 / w)."""
-        diff = dist.unsqueeze(-1) - self.rbf_centers   # (E, num_rbf)
+        diff = dist.unsqueeze(-1) - self.rbf_centers  # (E, num_rbf)
         return torch.exp(-diff.pow(2) / self.rbf_width)
 
     # ------------------------------------------------------------------
@@ -380,12 +397,12 @@ class SparseEGNN(nn.Module):
         dst, src = edge_index
 
         # Pairwise distances → RBF
-        dist = (pos[dst] - pos[src]).pow(2).sum(dim=-1).sqrt()   # (E,)
-        rbf = self._rbf(dist)                                      # (E, num_rbf)
+        dist = (pos[dst] - pos[src]).pow(2).sum(dim=-1).sqrt()  # (E,)
+        rbf = self._rbf(dist)  # (E, num_rbf)
 
         # Initial node and edge embeddings
-        h = self.atom_emb(z)                                                        # (N, C)
-        edge_emb = self.edge_emb_mlp(torch.cat([h[dst], h[src], rbf], dim=-1))     # (E, C)
+        h = self.atom_emb(z)  # (N, C)
+        edge_emb = self.edge_emb_mlp(torch.cat([h[dst], h[src], rbf], dim=-1))  # (E, C)
 
         # Frame schedule over color classes
         schedule = build_frame_schedule(
@@ -403,12 +420,10 @@ class SparseEGNN(nn.Module):
             mask = edge_coloring[color_idx].to(h.device).bool()
             h = self.mp_blocks[t](h, edge_emb, edge_index, mask, num_nodes)
             # Residually update edge embeddings with refreshed node features
-            edge_emb = edge_emb + self.edge_emb_mlp(
-                torch.cat([h[dst], h[src], rbf], dim=-1)
-            )
+            edge_emb = edge_emb + self.edge_emb_mlp(torch.cat([h[dst], h[src], rbf], dim=-1))
 
         # Readout: MLP on node features, sum-pooled per graph
-        out = self.readout(h, batch)    # (B, out_channels)
+        out = self.readout(h, batch)  # (B, out_channels)
 
         if return_schedule:
             return out, schedule

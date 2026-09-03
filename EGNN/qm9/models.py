@@ -1,7 +1,8 @@
-from models.gcl import E_GCL, unsorted_segment_sum
+from typing import Dict, List, Tuple
+
 import torch
+from models.gcl import E_GCL
 from torch import nn
-from typing import Dict, List, Optional, Sequence, Tuple
 
 
 class E_GCL_mask(E_GCL):
@@ -13,8 +14,30 @@ class E_GCL_mask(E_GCL):
           temp: Softmax temperature.
     """
 
-    def __init__(self, input_nf, output_nf, hidden_nf, edges_in_d=0, nodes_attr_dim=0, act_fn=nn.ReLU(), recurrent=True, coords_weight=1.0, attention=False):
-        E_GCL.__init__(self, input_nf, output_nf, hidden_nf, edges_in_d=edges_in_d, nodes_att_dim=nodes_attr_dim, act_fn=act_fn, recurrent=recurrent, coords_weight=coords_weight, attention=attention)
+    def __init__(
+        self,
+        input_nf,
+        output_nf,
+        hidden_nf,
+        edges_in_d=0,
+        nodes_attr_dim=0,
+        act_fn=nn.ReLU(),
+        recurrent=True,
+        coords_weight=1.0,
+        attention=False,
+    ):
+        E_GCL.__init__(
+            self,
+            input_nf,
+            output_nf,
+            hidden_nf,
+            edges_in_d=edges_in_d,
+            nodes_att_dim=nodes_attr_dim,
+            act_fn=act_fn,
+            recurrent=recurrent,
+            coords_weight=coords_weight,
+            attention=attention,
+        )
 
         del self.coord_mlp
         self.act_fn = act_fn
@@ -22,7 +45,17 @@ class E_GCL_mask(E_GCL):
     # NOTE: coord_model is never called (E_GCL_mask.forward does not update
     # coords), and self.coord_mlp was deleted above.
 
-    def forward(self, h, edge_index, coord, node_mask, edge_mask, edge_attr=None, node_attr=None, n_nodes=None):
+    def forward(
+        self,
+        h,
+        edge_index,
+        coord,
+        node_mask,
+        edge_mask,
+        edge_attr=None,
+        node_attr=None,
+        n_nodes=None,
+    ):
         row, col = edge_index
         radial, coord_diff = self.coord2radial(edge_index, coord)
 
@@ -36,8 +69,19 @@ class E_GCL_mask(E_GCL):
 
 
 class EGNN(nn.Module):
-    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, device='cpu', act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0, attention=False, node_attr=1):
-        super(EGNN, self).__init__()
+    def __init__(
+        self,
+        in_node_nf,
+        in_edge_nf,
+        hidden_nf,
+        device="cpu",
+        act_fn=nn.SiLU(),
+        n_layers=4,
+        coords_weight=1.0,
+        attention=False,
+        node_attr=1,
+    ):
+        super().__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -50,26 +94,68 @@ class EGNN(nn.Module):
         else:
             n_node_attr = 0
         for i in range(0, n_layers):
-            self.add_module("gcl_%d" % i, E_GCL_mask(self.hidden_nf, self.hidden_nf, self.hidden_nf, edges_in_d=in_edge_nf, nodes_attr_dim=n_node_attr, act_fn=act_fn, recurrent=True, coords_weight=coords_weight, attention=attention))
+            self.add_module(
+                "gcl_%d" % i,
+                E_GCL_mask(
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    edges_in_d=in_edge_nf,
+                    nodes_attr_dim=n_node_attr,
+                    act_fn=act_fn,
+                    recurrent=True,
+                    coords_weight=coords_weight,
+                    attention=attention,
+                ),
+            )
 
-        self.node_dec = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
-                                      act_fn,
-                                      nn.Linear(self.hidden_nf, self.hidden_nf))
+        self.node_dec = nn.Sequential(
+            nn.Linear(self.hidden_nf, self.hidden_nf),
+            act_fn,
+            nn.Linear(self.hidden_nf, self.hidden_nf),
+        )
 
-        self.graph_dec = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
-                                       act_fn,
-                                       nn.Linear(self.hidden_nf, 1))
+        self.graph_dec = nn.Sequential(
+            nn.Linear(self.hidden_nf, self.hidden_nf), act_fn, nn.Linear(self.hidden_nf, 1)
+        )
         self.to(self.device)
 
-    def forward(self, h0, x, edges, edge_attr, node_mask, edge_mask, n_nodes,
-                charges=None, sparse_edges_per_layer=None):
+    def forward(
+        self,
+        h0,
+        x,
+        edges,
+        edge_attr,
+        node_mask,
+        edge_mask,
+        n_nodes,
+        charges=None,
+        sparse_edges_per_layer=None,
+    ):
         h = self.embedding(h0)
         for i in range(0, self.n_layers):
             if self.node_attr:
-                h, _, _ = self._modules["gcl_%d" % i](h, edges, x, node_mask, edge_mask, edge_attr=edge_attr, node_attr=h0, n_nodes=n_nodes)
+                h, _, _ = self._modules["gcl_%d" % i](
+                    h,
+                    edges,
+                    x,
+                    node_mask,
+                    edge_mask,
+                    edge_attr=edge_attr,
+                    node_attr=h0,
+                    n_nodes=n_nodes,
+                )
             else:
-                h, _, _ = self._modules["gcl_%d" % i](h, edges, x, node_mask, edge_mask, edge_attr=edge_attr,
-                                                      node_attr=None, n_nodes=n_nodes)
+                h, _, _ = self._modules["gcl_%d" % i](
+                    h,
+                    edges,
+                    x,
+                    node_mask,
+                    edge_mask,
+                    edge_attr=edge_attr,
+                    node_attr=None,
+                    n_nodes=n_nodes,
+                )
 
         h = self.node_dec(h)
         h = h * node_mask
@@ -84,11 +170,28 @@ class EGNN(nn.Module):
 ###############################################################################
 
 _ATOMIC_MASS: Dict[int, float] = {
-    1: 1.008, 2: 4.003, 3: 6.941, 4: 9.012, 5: 10.811,
-    6: 12.011, 7: 14.007, 8: 15.999, 9: 18.998, 10: 20.180,
-    11: 22.990, 12: 24.305, 13: 26.982, 14: 28.086, 15: 30.974,
-    16: 32.065, 17: 35.453, 18: 39.948, 19: 39.098, 20: 40.078,
-    35: 79.904, 53: 126.904,
+    1: 1.008,
+    2: 4.003,
+    3: 6.941,
+    4: 9.012,
+    5: 10.811,
+    6: 12.011,
+    7: 14.007,
+    8: 15.999,
+    9: 18.998,
+    10: 20.180,
+    11: 22.990,
+    12: 24.305,
+    13: 26.982,
+    14: 28.086,
+    15: 30.974,
+    16: 32.065,
+    17: 35.453,
+    18: 39.948,
+    19: 39.098,
+    20: 40.078,
+    35: 79.904,
+    53: 126.904,
 }
 _MAX_Z = 100
 
@@ -183,14 +286,18 @@ def _sandwich_order(sorted_colors):
     out, lo, hi, take_low = [], 0, len(sorted_colors) - 1, True
     while lo <= hi:
         if take_low:
-            out.append(sorted_colors[lo]); lo += 1
+            out.append(sorted_colors[lo])
+            lo += 1
         else:
-            out.append(sorted_colors[hi]); hi -= 1
+            out.append(sorted_colors[hi])
+            hi -= 1
         take_low = not take_low
     return out
 
 
-def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering, frame_scoring, mass_table):
+def build_frame_schedule_single(
+    edge_index, charges, n_layers, frame_ordering, frame_scoring, mass_table
+):
     scoring_override = {
         "sandwich_atomic": "atomic_number",
         "sandwich_mass": "mass",
@@ -222,7 +329,7 @@ def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering, f
 # Preprocessing: precompute per-molecule active edge (row, col) pairs per layer
 ###############################################################################
 
-#Version 1: store (row, col) pairs of active edges per layer, as LongTensors on CPU. During batch assembly, these are concatenated and moved to GPU.
+# Version 1: store (row, col) pairs of active edges per layer, as LongTensors on CPU. During batch assembly, these are concatenated and moved to GPU.
 # def precompute_molecule_colorings(
 #     dataloaders: Dict,
 #     n_layers: int,
@@ -343,7 +450,8 @@ def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering, f
 
 #     return sparse_edges
 
-#Version 2: store (row, col) pairs of active edges per layer, as LongTensors on CPU. During batch assembly, these are concatenated and moved to GPU. Also store edge_mask tensors (all ones) for direct use by GCL layers.
+
+# Version 2: store (row, col) pairs of active edges per layer, as LongTensors on CPU. During batch assembly, these are concatenated and moved to GPU. Also store edge_mask tensors (all ones) for direct use by GCL layers.
 def precompute_molecule_colorings(
     dataloaders: Dict,
     n_layers: int,
@@ -355,9 +463,9 @@ def precompute_molecule_colorings(
 
     for loader in dataloaders.values():
         for data in loader:
-            batch_size, n_nodes, _ = data['positions'].size()
-            charges_batch = data['charges']
-            atom_mask_batch = data['atom_mask']
+            batch_size, n_nodes, _ = data["positions"].size()
+            charges_batch = data["charges"]
+            atom_mask_batch = data["atom_mask"]
 
             for g in range(batch_size):
                 n_real = int(atom_mask_batch[g].sum().item())
@@ -455,9 +563,11 @@ def assemble_batch_sparse_edges(
         sparse_edges.append((rows, cols, edge_mask))
     return sparse_edges
 
+
 ###############################################################################
 # SparseEGNN
 ###############################################################################
+
 
 class SparseEGNN(nn.Module):
     """
@@ -480,16 +590,16 @@ class SparseEGNN(nn.Module):
         in_node_nf,
         in_edge_nf,
         hidden_nf,
-        device='cpu',
+        device="cpu",
         act_fn=nn.SiLU(),
         n_layers=4,
         coords_weight=1.0,
         attention=False,
         node_attr=1,
-        frame_ordering='sort_repeat',
-        frame_scoring='atomic_number',
+        frame_ordering="sort_repeat",
+        frame_scoring="atomic_number",
     ):
-        super(SparseEGNN, self).__init__()
+        super().__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -503,15 +613,20 @@ class SparseEGNN(nn.Module):
         self.embedding = nn.Linear(in_node_nf, hidden_nf)
         n_node_attr = in_node_nf if node_attr else 0
         for i in range(n_layers):
-            self.add_module("gcl_%d" % i, E_GCL_mask(
-                hidden_nf, hidden_nf, hidden_nf,
-                edges_in_d=in_edge_nf,
-                nodes_attr_dim=n_node_attr,
-                act_fn=act_fn,
-                recurrent=True,
-                coords_weight=coords_weight,
-                attention=attention,
-            ))
+            self.add_module(
+                "gcl_%d" % i,
+                E_GCL_mask(
+                    hidden_nf,
+                    hidden_nf,
+                    hidden_nf,
+                    edges_in_d=in_edge_nf,
+                    nodes_attr_dim=n_node_attr,
+                    act_fn=act_fn,
+                    recurrent=True,
+                    coords_weight=coords_weight,
+                    attention=attention,
+                ),
+            )
 
         self.node_dec = nn.Sequential(
             nn.Linear(hidden_nf, hidden_nf),
@@ -525,8 +640,18 @@ class SparseEGNN(nn.Module):
         )
         self.to(device)
 
-    def forward(self, h0, x, edges, edge_attr, node_mask, edge_mask, n_nodes,
-                charges=None, sparse_edges_per_layer=None):
+    def forward(
+        self,
+        h0,
+        x,
+        edges,
+        edge_attr,
+        node_mask,
+        edge_mask,
+        n_nodes,
+        charges=None,
+        sparse_edges_per_layer=None,
+    ):
         """
         Args:
             h0, x, node_mask, n_nodes: same as EGNN
@@ -549,8 +674,14 @@ class SparseEGNN(nn.Module):
 
             node_attr_i = h0 if self.node_attr else None
             h, _, _ = self._modules["gcl_%d" % i](
-                h, sparse_edge_index, x, node_mask, sparse_emask,
-                edge_attr=None, node_attr=node_attr_i, n_nodes=n_nodes,
+                h,
+                sparse_edge_index,
+                x,
+                node_mask,
+                sparse_emask,
+                edge_attr=None,
+                node_attr=node_attr_i,
+                n_nodes=n_nodes,
             )
 
         h = self.node_dec(h)
@@ -559,9 +690,3 @@ class SparseEGNN(nn.Module):
         h = torch.sum(h, dim=1)
         pred = self.graph_dec(h)
         return pred.squeeze(1)
-
-
-
-
-
-

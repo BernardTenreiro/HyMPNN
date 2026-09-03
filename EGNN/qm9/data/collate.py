@@ -1,4 +1,5 @@
 import os
+
 import torch
 
 
@@ -72,23 +73,23 @@ def collate_fn(batch):
     """
     batch = {prop: batch_stack([mol[prop] for mol in batch]) for prop in batch[0].keys()}
 
-    to_keep = (batch['charges'].sum(0) > 0)
+    to_keep = batch["charges"].sum(0) > 0
 
     batch = {key: drop_zeros(prop, to_keep) for key, prop in batch.items()}
 
-    atom_mask = batch['charges'] > 0
-    batch['atom_mask'] = atom_mask
+    atom_mask = batch["charges"] > 0
+    batch["atom_mask"] = atom_mask
 
-    #Obtain edges
+    # Obtain edges
     batch_size, n_nodes = atom_mask.size()
     edge_mask = atom_mask.unsqueeze(1) * atom_mask.unsqueeze(2)
 
-    #mask diagonal
+    # mask diagonal
     diag_mask = ~torch.eye(edge_mask.size(1), dtype=torch.bool).unsqueeze(0)
     edge_mask *= diag_mask
 
-    #edge_mask = atom_mask.unsqueeze(1) * atom_mask.unsqueeze(2)
-    batch['edge_mask'] = edge_mask.view(batch_size * n_nodes * n_nodes, 1)
+    # edge_mask = atom_mask.unsqueeze(1) * atom_mask.unsqueeze(2)
+    batch["edge_mask"] = edge_mask.view(batch_size * n_nodes * n_nodes, 1)
 
     # Compressed dense edge index: only the edges the mask keeps.
     #
@@ -98,16 +99,16 @@ def collate_fn(batch):
     # aggregation relies on. Padded atoms are ~53% of the dense edges and
     # contribute exactly zero (edge_feat is multiplied by edge_mask), so
     # dropping them changes only how many zero terms enter the scatter-add.
-    if os.environ.get('EGNN_BASELINE'):
-        return batch          # A/B switch: skip edge compression
+    if os.environ.get("EGNN_BASELINE"):
+        return batch  # A/B switch: skip edge compression
 
     flat = edge_mask.view(-1)
     keep = flat.nonzero(as_tuple=True)[0]
-    b_idx = torch.div(keep, n_nodes * n_nodes, rounding_mode='floor')
+    b_idx = torch.div(keep, n_nodes * n_nodes, rounding_mode="floor")
     rem = keep - b_idx * (n_nodes * n_nodes)
-    i_idx = torch.div(rem, n_nodes, rounding_mode='floor')
+    i_idx = torch.div(rem, n_nodes, rounding_mode="floor")
     j_idx = rem - i_idx * n_nodes
-    batch['dense_rows'] = b_idx * n_nodes + i_idx
-    batch['dense_cols'] = b_idx * n_nodes + j_idx
+    batch["dense_rows"] = b_idx * n_nodes + i_idx
+    batch["dense_cols"] = b_idx * n_nodes + j_idx
 
     return batch

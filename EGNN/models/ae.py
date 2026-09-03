@@ -1,6 +1,8 @@
-from torch import nn
 import torch
-from models.gcl import GCL, GCL_rf, E_GCL
+from torch import nn
+
+from models.gcl import E_GCL, GCL, GCL_rf
+
 
 class AE_parent(nn.Module):
     """Graph Neural Net with global state and fixed number of nodes per graph.
@@ -12,7 +14,7 @@ class AE_parent(nn.Module):
     """
 
     def __init__(self):
-        super(AE_parent, self).__init__()
+        super().__init__()
 
     def encode(self, nodes, edges, edge_attr):
         pass
@@ -25,12 +27,12 @@ class AE_parent(nn.Module):
         x_a = x.unsqueeze(0)
         x_b = torch.transpose(x_a, 0, 1)
         X = (x_a - x_b) ** 2
-        X = X.view(n_nodes ** 2, -1)
-        #X = torch.sigmoid(self.C*torch.sum(X, dim=1) + self.b)
+        X = X.view(n_nodes**2, -1)
+        # X = torch.sigmoid(self.C*torch.sum(X, dim=1) + self.b)
         if linear_layer is not None:
             X = torch.sigmoid(linear_layer(X))
         else:
-            X = torch.sigmoid(C*torch.sum(X, dim=1) + b)
+            X = torch.sigmoid(C * torch.sum(X, dim=1) + b)
 
         adj_pred = X.view(n_nodes, n_nodes)
         if remove_diagonal:
@@ -44,17 +46,48 @@ class AE_parent(nn.Module):
 
 
 class AE(AE_parent):
-    def __init__(self, hidden_nf, embedding_nf=32, noise_dim=1, device='cpu', act_fn=nn.SiLU(), learnable_dec=1, n_layers=4, attention=0):
-        super(AE, self).__init__()
+    def __init__(
+        self,
+        hidden_nf,
+        embedding_nf=32,
+        noise_dim=1,
+        device="cpu",
+        act_fn=nn.SiLU(),
+        learnable_dec=1,
+        n_layers=4,
+        attention=0,
+    ):
+        super().__init__()
         self.hidden_nf = hidden_nf
         self.embedding_nf = embedding_nf
         self.noise_dim = noise_dim
         self.device = device
         self.n_layers = n_layers
         ### Encoder
-        self.add_module("gcl_0", GCL(max(1, self.noise_dim), self.hidden_nf, self.hidden_nf, edges_in_nf=1, act_fn=act_fn, attention=attention, recurrent=False))
+        self.add_module(
+            "gcl_0",
+            GCL(
+                max(1, self.noise_dim),
+                self.hidden_nf,
+                self.hidden_nf,
+                edges_in_nf=1,
+                act_fn=act_fn,
+                attention=attention,
+                recurrent=False,
+            ),
+        )
         for i in range(1, n_layers):
-            self.add_module("gcl_%d" % i, GCL(self.hidden_nf, self.hidden_nf, self.hidden_nf, edges_in_nf=1, act_fn=act_fn, attention=attention))
+            self.add_module(
+                "gcl_%d" % i,
+                GCL(
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    edges_in_nf=1,
+                    act_fn=act_fn,
+                    attention=attention,
+                ),
+            )
         self.fc_emb = nn.Linear(self.hidden_nf, self.embedding_nf)
 
         ### Decoder
@@ -76,8 +109,17 @@ class AE(AE_parent):
 
 
 class AE_rf(AE_parent):
-    def __init__(self, embedding_nf=32, nf=64, device='cpu', n_layers=4, act_fn=nn.SiLU(), reg=1e-3, clamp=False):
-        super(AE_rf, self).__init__()
+    def __init__(
+        self,
+        embedding_nf=32,
+        nf=64,
+        device="cpu",
+        n_layers=4,
+        act_fn=nn.SiLU(),
+        reg=1e-3,
+        clamp=False,
+    ):
+        super().__init__()
         self.embedding_nf = embedding_nf
         self.device = device
         self.n_layers = n_layers
@@ -85,7 +127,9 @@ class AE_rf(AE_parent):
         ### Encoder
         self.gcl = GCL_rf(nf, reg=reg)
         for i in range(n_layers):
-            self.add_module("gcl_%d" % i, GCL_rf(nf, act_fn=act_fn, reg=reg, edge_attr_nf=1, clamp=clamp))
+            self.add_module(
+                "gcl_%d" % i, GCL_rf(nf, act_fn=act_fn, reg=reg, edge_attr_nf=1, clamp=clamp)
+            )
 
         ### Decoder
         self.w = nn.Parameter(-0.1 * torch.ones(1)).to(device)
@@ -102,23 +146,46 @@ class AE_rf(AE_parent):
         return x
 
 
-
 class AE_EGNN(AE_parent):
-    def __init__(self, hidden_nf, K=8, device='cpu', act_fn=nn.SiLU(), n_layers=4, reg = 1e-3, clamp=False):
-        super(AE_EGNN, self).__init__()
+    def __init__(
+        self, hidden_nf, K=8, device="cpu", act_fn=nn.SiLU(), n_layers=4, reg=1e-3, clamp=False
+    ):
+        super().__init__()
         self.hidden_nf = hidden_nf
         self.K = K
         self.device = device
         self.n_layers = n_layers
         self.reg = reg
         ### Encoder
-        self.add_module("gcl_0", E_GCL(1, self.hidden_nf, self.hidden_nf, edges_in_d=1, act_fn=act_fn, recurrent=False, clamp=clamp))
+        self.add_module(
+            "gcl_0",
+            E_GCL(
+                1,
+                self.hidden_nf,
+                self.hidden_nf,
+                edges_in_d=1,
+                act_fn=act_fn,
+                recurrent=False,
+                clamp=clamp,
+            ),
+        )
         for i in range(1, n_layers):
-            self.add_module("gcl_%d" % i, E_GCL(self.hidden_nf, self.hidden_nf, self.hidden_nf, edges_in_d=1, act_fn=act_fn, recurrent=True, clamp=clamp))
-        #self.fc_emb = nn.Linear(self.hidden_nf, self.embedding_nf)
+            self.add_module(
+                "gcl_%d" % i,
+                E_GCL(
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    edges_in_d=1,
+                    act_fn=act_fn,
+                    recurrent=True,
+                    clamp=clamp,
+                ),
+            )
+        # self.fc_emb = nn.Linear(self.hidden_nf, self.embedding_nf)
 
         ### Decoder
-        self.w = nn.Parameter(-0.1*torch.ones(1)).to(device)
+        self.w = nn.Parameter(-0.1 * torch.ones(1)).to(device)
         self.b = nn.Parameter(torch.ones(1)).to(device)
         self.to(self.device)
 
@@ -127,11 +194,11 @@ class AE_EGNN(AE_parent):
 
     def encode(self, h, edges, edge_attr=None):
         coords = torch.randn(h.size(0), self.K).to(self.device)
-        #h, coords, _ = self._modules["gcl_0"](nodes, edges, coords, edge_attr=edge_attr)
+        # h, coords, _ = self._modules["gcl_0"](nodes, edges, coords, edge_attr=edge_attr)
         for i in range(0, self.n_layers):
             h, coords, _ = self._modules["gcl_%d" % i](h, edges, coords, edge_attr=edge_attr)
             coords -= self.reg * coords
-            #coords = normalizer(coords)
+            # coords = normalizer(coords)
         return coords
 
 
@@ -144,8 +211,8 @@ class Baseline(nn.Module):
           temp: Softmax temperature.
     """
 
-    def __init__(self, device='cpu'):
-        super(Baseline, self).__init__()
+    def __init__(self, device="cpu"):
+        super().__init__()
         self.dummy = nn.Parameter(torch.ones(1))
         self.device = device
         self.to(device)
@@ -157,5 +224,5 @@ class Baseline(nn.Module):
 
 def normalizer(x):
     x = x - torch.mean(x, dim=0).unsqueeze(0)
-    #x = x / (torch.max(x) - torch.min(x) +1e-8)
+    # x = x / (torch.max(x) - torch.min(x) +1e-8)
     return x

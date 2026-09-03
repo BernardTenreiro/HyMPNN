@@ -1,8 +1,8 @@
-from torch.nn import functional as F
 import torch
+from torch.nn import functional as F
 
 
-def vae_loss(adj_rec, adj_gt, mu, logvar, reduce='sum'):
+def vae_loss(adj_rec, adj_gt, mu, logvar, reduce="sum"):
     # Reconstruction + KL divergence losses summed over all elements and batch
     BCE = adj_bce(adj_rec, adj_gt, reduce)
 
@@ -17,6 +17,5 @@ def vae_loss(adj_rec, adj_gt, mu, logvar, reduce='sum'):
     return BCE, KLD
 
 
-def adj_bce(pred, gt, reduce='mean', weight=None):
+def adj_bce(pred, gt, reduce="mean", weight=None):
     return F.binary_cross_entropy(pred.view(-1, 1), gt.view(-1, 1), reduction=reduce, weight=weight)
-

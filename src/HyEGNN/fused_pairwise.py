@@ -10,7 +10,9 @@ gradient scatter differs, so agreement is to fp32 rounding rather than bitwise.
 That is well inside this model's own run-to-run nondeterminism, which comes
 from the atomic scatter_add in the standard EGNN layers.
 """
+
 import os
+
 import torch
 from torch import nn
 
@@ -22,6 +24,7 @@ def load_kernels(verbose=False):
     global _KERNELS
     if _KERNELS is None:
         from torch.utils.cpp_extension import load
+
         here = os.path.dirname(os.path.abspath(__file__))
         _KERNELS = load(
             name="hyegnn_pairwise",
@@ -62,7 +65,8 @@ class _Epilogue(torch.autograd.Function):
     def backward(ctx, dout):
         h, gate, rows, cols = ctx.saved_tensors
         dh, dz_s, dgate = load_kernels().epilogue_backward(
-            h, gate, dout, rows, cols, ctx.eager_compat)
+            h, gate, dout, rows, cols, ctx.eager_compat
+        )
         return dh, dz_s, dgate, None, None, None
 
 
@@ -78,12 +82,15 @@ class FusedPairwiseSymAsymLayer(nn.Module):
         # behaviour (h_i_new with zero gradient) for old-run comparisons.
         self.eager_compat = eager_compat
         self.f_s = nn.Sequential(
-            nn.Linear(2 * hidden_nf + 1, hidden_nf), act_fn,
+            nn.Linear(2 * hidden_nf + 1, hidden_nf),
+            act_fn,
             nn.Linear(hidden_nf, hidden_nf),
         )
         self.f_d_gate = nn.Sequential(
-            nn.Linear(hidden_nf + 1, hidden_nf), act_fn,
-            nn.Linear(hidden_nf, hidden_nf), nn.Sigmoid(),
+            nn.Linear(hidden_nf + 1, hidden_nf),
+            act_fn,
+            nn.Linear(hidden_nf, hidden_nf),
+            nn.Sigmoid(),
         )
 
     @torch.no_grad()

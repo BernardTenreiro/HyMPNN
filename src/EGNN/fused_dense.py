@@ -12,8 +12,10 @@ Note the BACKWARD still uses atomicAdd to scatter into dh/dx (`col` is not
 sorted, so only the row half could be made segmented). This layer is therefore
 no more run-to-run deterministic than the reference -- measured, not assumed.
 """
+
 import os
 import weakref
+
 import torch
 from torch import nn
 
@@ -24,6 +26,7 @@ def load_kernels(verbose=False):
     global _KERNELS
     if _KERNELS is None:
         from torch.utils.cpp_extension import load
+
         here = os.path.dirname(os.path.abspath(__file__))
         _KERNELS = load(
             name="egnn_dense",
@@ -52,8 +55,7 @@ def row_offsets(row, num_nodes):
     hit = _OFF_CACHE.get(key)
     if hit is not None and hit[0]() is row and hit[1] == num_nodes:
         return hit[2]
-    off = torch.searchsorted(
-        row, torch.arange(num_nodes + 1, device=row.device, dtype=row.dtype))
+    off = torch.searchsorted(row, torch.arange(num_nodes + 1, device=row.device, dtype=row.dtype))
 
     def discard(ref, cache_key=key):
         current = _OFF_CACHE.get(cache_key)
@@ -88,26 +90,26 @@ class _Epilogue(torch.autograd.Function):
     @staticmethod
     def backward(ctx, dB):
         h, m, att, emask, row = ctx.saved_tensors
-        dh, dm, datt = load_kernels().dense_epilogue_backward(
-            h, m, att, emask, dB, row)
+        dh, dm, datt = load_kernels().dense_epilogue_backward(h, m, att, emask, dB, row)
         return dh, dm, datt, None, None, None
 
 
 class FusedEGCLMask(nn.Module):
     """Same parameters and semantics as E_GCL_mask (attention on, no coord update)."""
 
-    def __init__(self, input_nf, output_nf, hidden_nf, act_fn=nn.SiLU(),
-                 attention=True, mask_is_ones=False):
+    def __init__(
+        self, input_nf, output_nf, hidden_nf, act_fn=nn.SiLU(), attention=True, mask_is_ones=False
+    ):
         super().__init__()
         self.attention = attention
         self.mask_is_ones = mask_is_ones
         self.hidden_nf = hidden_nf
         self.edge_mlp = nn.Sequential(
-            nn.Linear(input_nf * 2 + 1, hidden_nf), act_fn,
-            nn.Linear(hidden_nf, hidden_nf), act_fn)
+            nn.Linear(input_nf * 2 + 1, hidden_nf), act_fn, nn.Linear(hidden_nf, hidden_nf), act_fn
+        )
         self.node_mlp = nn.Sequential(
-            nn.Linear(hidden_nf + input_nf, hidden_nf), act_fn,
-            nn.Linear(hidden_nf, output_nf))
+            nn.Linear(hidden_nf + input_nf, hidden_nf), act_fn, nn.Linear(hidden_nf, output_nf)
+        )
         if attention:
             self.att_mlp = nn.Sequential(nn.Linear(hidden_nf, 1), nn.Sigmoid())
 
@@ -119,13 +121,26 @@ class FusedEGCLMask(nn.Module):
             self.att_mlp.load_state_dict(eager.att_mlp.state_dict())
         return self
 
-    def forward(self, h, edge_index, coord, node_mask, edge_mask,
-                edge_attr=None, node_attr=None, n_nodes=None, off=None):
+    def forward(
+        self,
+        h,
+        edge_index,
+        coord,
+        node_mask,
+        edge_mask,
+        edge_attr=None,
+        node_attr=None,
+        n_nodes=None,
+        off=None,
+    ):
         row, col = edge_index
         A = _Prologue.apply(h, coord, row, col)
         m = self.edge_mlp(A)
-        att = self.att_mlp(m) if self.attention else torch.ones(
-            m.size(0), 1, device=m.device, dtype=m.dtype)
+        att = (
+            self.att_mlp(m)
+            if self.attention
+            else torch.ones(m.size(0), 1, device=m.device, dtype=m.dtype)
+        )
         # An all-ones mask (the compressed-edge path) is skipped rather than
         # multiplied: x*1.0 is exact, so this is bitwise-neutral.
         # Skipping an all-ones mask is bitwise-neutral (x*1.0 is exact), but the

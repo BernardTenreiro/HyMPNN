@@ -1,20 +1,49 @@
-from models.gcl import E_GCL, unsorted_segment_sum
+from typing import Dict, List, Tuple
+
 import torch
+from models.gcl import E_GCL
 from torch import nn
-from typing import Dict, List, Optional, Tuple
 
 
 class E_GCL_mask(E_GCL):
-    def __init__(self, input_nf, output_nf, hidden_nf, edges_in_d=0, nodes_attr_dim=0,
-                 act_fn=nn.ReLU(), recurrent=True, coords_weight=1.0, attention=False):
-        E_GCL.__init__(self, input_nf, output_nf, hidden_nf, edges_in_d=edges_in_d,
-                        nodes_att_dim=nodes_attr_dim, act_fn=act_fn, recurrent=recurrent,
-                        coords_weight=coords_weight, attention=attention)
+    def __init__(
+        self,
+        input_nf,
+        output_nf,
+        hidden_nf,
+        edges_in_d=0,
+        nodes_attr_dim=0,
+        act_fn=nn.ReLU(),
+        recurrent=True,
+        coords_weight=1.0,
+        attention=False,
+    ):
+        E_GCL.__init__(
+            self,
+            input_nf,
+            output_nf,
+            hidden_nf,
+            edges_in_d=edges_in_d,
+            nodes_att_dim=nodes_attr_dim,
+            act_fn=act_fn,
+            recurrent=recurrent,
+            coords_weight=coords_weight,
+            attention=attention,
+        )
         del self.coord_mlp
         self.act_fn = act_fn
 
-    def forward(self, h, edge_index, coord, node_mask, edge_mask,
-                edge_attr=None, node_attr=None, n_nodes=None):
+    def forward(
+        self,
+        h,
+        edge_index,
+        coord,
+        node_mask,
+        edge_mask,
+        edge_attr=None,
+        node_attr=None,
+        n_nodes=None,
+    ):
         row, col = edge_index
         radial, coord_diff = self.coord2radial(edge_index, coord)
         edge_feat = self.edge_model(h[row], h[col], radial, edge_attr)
@@ -25,10 +54,20 @@ class E_GCL_mask(E_GCL):
 
 class EGNN(nn.Module):
     """Standard EGNN"""
-    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, device='cpu',
-                 act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0,
-                 attention=False, node_attr=1):
-        super(EGNN, self).__init__()
+
+    def __init__(
+        self,
+        in_node_nf,
+        in_edge_nf,
+        hidden_nf,
+        device="cpu",
+        act_fn=nn.SiLU(),
+        n_layers=4,
+        coords_weight=1.0,
+        attention=False,
+        node_attr=1,
+    ):
+        super().__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -36,27 +75,66 @@ class EGNN(nn.Module):
         self.node_attr = node_attr
         n_node_attr = in_node_nf if node_attr else 0
         for i in range(n_layers):
-            self.add_module("gcl_%d" % i, E_GCL_mask(
-                self.hidden_nf, self.hidden_nf, self.hidden_nf,
-                edges_in_d=in_edge_nf, nodes_attr_dim=n_node_attr,
-                act_fn=act_fn, recurrent=True,
-                coords_weight=coords_weight, attention=attention))
-        self.node_dec = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
-                                      act_fn, nn.Linear(self.hidden_nf, self.hidden_nf))
-        self.graph_dec = nn.Sequential(nn.Linear(self.hidden_nf, self.hidden_nf),
-                                       act_fn, nn.Linear(self.hidden_nf, 1))
+            self.add_module(
+                "gcl_%d" % i,
+                E_GCL_mask(
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    self.hidden_nf,
+                    edges_in_d=in_edge_nf,
+                    nodes_attr_dim=n_node_attr,
+                    act_fn=act_fn,
+                    recurrent=True,
+                    coords_weight=coords_weight,
+                    attention=attention,
+                ),
+            )
+        self.node_dec = nn.Sequential(
+            nn.Linear(self.hidden_nf, self.hidden_nf),
+            act_fn,
+            nn.Linear(self.hidden_nf, self.hidden_nf),
+        )
+        self.graph_dec = nn.Sequential(
+            nn.Linear(self.hidden_nf, self.hidden_nf), act_fn, nn.Linear(self.hidden_nf, 1)
+        )
         self.to(self.device)
 
-    def forward(self, h0, x, edges, edge_attr, node_mask, edge_mask, n_nodes,
-                charges=None, sparse_edges_per_layer=None):
+    def forward(
+        self,
+        h0,
+        x,
+        edges,
+        edge_attr,
+        node_mask,
+        edge_mask,
+        n_nodes,
+        charges=None,
+        sparse_edges_per_layer=None,
+    ):
         h = self.embedding(h0)
         for i in range(self.n_layers):
             if self.node_attr:
-                h, _, _ = self._modules["gcl_%d" % i](h, edges, x, node_mask, edge_mask,
-                    edge_attr=edge_attr, node_attr=h0, n_nodes=n_nodes)
+                h, _, _ = self._modules["gcl_%d" % i](
+                    h,
+                    edges,
+                    x,
+                    node_mask,
+                    edge_mask,
+                    edge_attr=edge_attr,
+                    node_attr=h0,
+                    n_nodes=n_nodes,
+                )
             else:
-                h, _, _ = self._modules["gcl_%d" % i](h, edges, x, node_mask, edge_mask,
-                    edge_attr=edge_attr, node_attr=None, n_nodes=n_nodes)
+                h, _, _ = self._modules["gcl_%d" % i](
+                    h,
+                    edges,
+                    x,
+                    node_mask,
+                    edge_mask,
+                    edge_attr=edge_attr,
+                    node_attr=None,
+                    n_nodes=n_nodes,
+                )
         h = self.node_dec(h)
         h = h * node_mask
         h = h.view(-1, n_nodes, self.hidden_nf)
@@ -64,9 +142,11 @@ class EGNN(nn.Module):
         pred = self.graph_dec(h)
         return pred.squeeze(1)
 
+
 ###############################################################################
 # Pairwise E_GCL
 ###############################################################################
+
 
 class PairwiseEGCL(nn.Module):
     """
@@ -95,9 +175,9 @@ class PairwiseEGCL(nn.Module):
         nodes_attr_dim=0,
         act_fn=nn.SiLU(),
         recurrent=True,
-        attention=False
+        attention=False,
     ):
-        super(PairwiseEGCL, self).__init__()
+        super().__init__()
 
         input_edge = input_nf * 2
 
@@ -107,44 +187,28 @@ class PairwiseEGCL(nn.Module):
 
         # Same edge MLP as E_GCL
         self.edge_mlp = nn.Sequential(
-            nn.Linear(
-                input_edge + 1 + edges_in_d,
-                hidden_nf
-            ),
+            nn.Linear(input_edge + 1 + edges_in_d, hidden_nf),
             act_fn,
             nn.Linear(hidden_nf, hidden_nf),
-            act_fn
+            act_fn,
         )
 
         # Same node MLP as E_GCL
         self.node_mlp = nn.Sequential(
-            nn.Linear(
-                hidden_nf + input_nf + nodes_attr_dim,
-                hidden_nf
-            ),
+            nn.Linear(hidden_nf + input_nf + nodes_attr_dim, hidden_nf),
             act_fn,
-            nn.Linear(hidden_nf, output_nf)
+            nn.Linear(hidden_nf, output_nf),
         )
 
         # Same attention mechanism as E_GCL
         if self.attention:
-            self.att_mlp = nn.Sequential(
-                nn.Linear(hidden_nf, 1),
-                nn.Sigmoid()
-            )
+            self.att_mlp = nn.Sequential(nn.Linear(hidden_nf, 1), nn.Sigmoid())
 
     def edge_model(self, source, target, radial, edge_attr=None):
-
         if edge_attr is None:
-            out = torch.cat(
-                [source, target, radial],
-                dim=1
-            )
+            out = torch.cat([source, target, radial], dim=1)
         else:
-            out = torch.cat(
-                [source, target, radial, edge_attr],
-                dim=1
-            )
+            out = torch.cat([source, target, radial, edge_attr], dim=1)
 
         out = self.edge_mlp(out)
 
@@ -154,15 +218,7 @@ class PairwiseEGCL(nn.Module):
 
         return out
 
-    def forward(
-        self,
-        h,
-        x,
-        rows,
-        cols,
-        node_attr=None,
-        edge_attr=None
-    ):
+    def forward(self, h, x, rows, cols, node_attr=None, edge_attr=None):
         """
         Args:
             h:
@@ -201,11 +257,7 @@ class PairwiseEGCL(nn.Module):
 
         coord_diff = x[rows] - x[cols]
 
-        radial = torch.sum(
-            coord_diff ** 2,
-            dim=1,
-            keepdim=True
-        )
+        radial = torch.sum(coord_diff**2, dim=1, keepdim=True)
 
         # ============================================================
         # Forward direction: i -> j
@@ -217,12 +269,7 @@ class PairwiseEGCL(nn.Module):
         h_i = h[rows]
         h_j = h[cols]
 
-        edge_ij = self.edge_model(
-            h_i,
-            h_j,
-            radial,
-            edge_attr
-        )
+        edge_ij = self.edge_model(h_i, h_j, radial, edge_attr)
 
         # ============================================================
         # Reverse direction: j -> i
@@ -231,12 +278,7 @@ class PairwiseEGCL(nn.Module):
         # edge_model(h[col], h[row], radial)
         # ============================================================
 
-        edge_ji = self.edge_model(
-            h_j,
-            h_i,
-            radial,
-            edge_attr
-        )
+        edge_ji = self.edge_model(h_j, h_i, radial, edge_attr)
 
         # ============================================================
         # Node updates
@@ -263,27 +305,15 @@ class PairwiseEGCL(nn.Module):
 
         # Node i receives message from j -> i
         if node_attr_i is not None:
-            agg_i = torch.cat(
-                [h_i, edge_ji, node_attr_i],
-                dim=1
-            )
+            agg_i = torch.cat([h_i, edge_ji, node_attr_i], dim=1)
         else:
-            agg_i = torch.cat(
-                [h_i, edge_ji],
-                dim=1
-            )
+            agg_i = torch.cat([h_i, edge_ji], dim=1)
 
         # Node j receives message from i -> j
         if node_attr_j is not None:
-            agg_j = torch.cat(
-                [h_j, edge_ij, node_attr_j],
-                dim=1
-            )
+            agg_j = torch.cat([h_j, edge_ij, node_attr_j], dim=1)
         else:
-            agg_j = torch.cat(
-                [h_j, edge_ij],
-                dim=1
-            )
+            agg_j = torch.cat([h_j, edge_ij], dim=1)
 
         # ============================================================
         # Node MLP
@@ -308,9 +338,11 @@ class PairwiseEGCL(nn.Module):
 
         return h_updated
 
+
 ###############################################################################
 # Pairwise Joint Update Layer
 ###############################################################################
+
 
 class PairwiseJointLayer(nn.Module):
     """
@@ -335,13 +367,8 @@ class PairwiseJointLayer(nn.Module):
     Coordinates are not updated, matching E_GCL_mask.
     """
 
-    def __init__(
-        self,
-        hidden_nf,
-        act_fn=nn.SiLU(),
-        node_attr_dim=0
-    ):
-        super(PairwiseJointLayer, self).__init__()
+    def __init__(self, hidden_nf, act_fn=nn.SiLU(), node_attr_dim=0):
+        super().__init__()
 
         self.hidden_nf = hidden_nf
         self.node_attr_dim = node_attr_dim
@@ -358,25 +385,12 @@ class PairwiseJointLayer(nn.Module):
         #   update -> hidden_nf
 
         self.update_mlp = nn.Sequential(
-            nn.Linear(
-                2 * hidden_nf + 1 + node_attr_dim,
-                hidden_nf
-            ),
+            nn.Linear(2 * hidden_nf + 1 + node_attr_dim, hidden_nf),
             act_fn,
-            nn.Linear(
-                hidden_nf,
-                hidden_nf
-            )
+            nn.Linear(hidden_nf, hidden_nf),
         )
 
-    def forward(
-        self,
-        h,
-        x,
-        rows,
-        cols,
-        node_attr=None
-    ):
+    def forward(self, h, x, rows, cols, node_attr=None):
         """
         Args:
             h:
@@ -415,11 +429,7 @@ class PairwiseJointLayer(nn.Module):
 
         coord_diff = x[rows] - x[cols]
 
-        radial = torch.sum(
-            coord_diff ** 2,
-            dim=1,
-            keepdim=True
-        )
+        radial = torch.sum(coord_diff**2, dim=1, keepdim=True)
 
         # ============================================================
         # Node attributes
@@ -442,63 +452,24 @@ class PairwiseJointLayer(nn.Module):
         # ============================================================
 
         if node_attr_i is not None:
+            input_i = torch.cat([h_i, h_j, radial, node_attr_i], dim=-1)
 
-            input_i = torch.cat(
-                [
-                    h_i,
-                    h_j,
-                    radial,
-                    node_attr_i
-                ],
-                dim=-1
-            )
-
-            input_j = torch.cat(
-                [
-                    h_j,
-                    h_i,
-                    radial,
-                    node_attr_j
-                ],
-                dim=-1
-            )
+            input_j = torch.cat([h_j, h_i, radial, node_attr_j], dim=-1)
 
         else:
+            input_i = torch.cat([h_i, h_j, radial], dim=-1)
 
-            input_i = torch.cat(
-                [
-                    h_i,
-                    h_j,
-                    radial
-                ],
-                dim=-1
-            )
-
-            input_j = torch.cat(
-                [
-                    h_j,
-                    h_i,
-                    radial
-                ],
-                dim=-1
-            )
+            input_j = torch.cat([h_j, h_i, radial], dim=-1)
 
         # ============================================================
         # One batched neural-network call
         # ============================================================
 
-        update_input = torch.cat(
-            [input_i, input_j],
-            dim=0
-        )
+        update_input = torch.cat([input_i, input_j], dim=0)
 
         updates = self.update_mlp(update_input)
 
-        update_i, update_j = torch.chunk(
-            updates,
-            2,
-            dim=0
-        )
+        update_i, update_j = torch.chunk(updates, 2, dim=0)
 
         # ============================================================
         # Residual updates
@@ -518,9 +489,11 @@ class PairwiseJointLayer(nn.Module):
 
         return h_updated
 
+
 ###############################################################################
 # PairwiseSymmetricLayer
 ###############################################################################
+
 
 class PairwiseSymmetricLayer(nn.Module):
     """
@@ -548,7 +521,7 @@ class PairwiseSymmetricLayer(nn.Module):
     """
 
     def __init__(self, hidden_nf, act_fn=nn.SiLU()):
-        super(PairwiseSymmetricLayer, self).__init__()
+        super().__init__()
 
         self.hidden_nf = hidden_nf
 
@@ -594,25 +567,14 @@ class PairwiseSymmetricLayer(nn.Module):
         # Coordinate information
         coord_diff = x[rows] - x[cols]
 
-        radial = (
-            coord_diff ** 2
-        ).sum(dim=-1, keepdim=True)
+        radial = (coord_diff**2).sum(dim=-1, keepdim=True)
 
         # Symmetric pair representation
         h_s = h_i + h_j
         h_d = h_i - h_j
 
         # Single NN call
-        z = self.f(
-            torch.cat(
-                [
-                    h_s,
-                    h_d.abs(),
-                    radial
-                ],
-                dim=-1
-            )
-        )
+        z = self.f(torch.cat([h_s, h_d.abs(), radial], dim=-1))
 
         # Same symmetric update to both endpoints
         h_i_new = h_i + z
@@ -627,13 +589,13 @@ class PairwiseSymmetricLayer(nn.Module):
         return h_updated
 
 
-
 ###############################################################################
-# Pairwise Joint Update Layer (suggestion #4)
+# Pairwise symmetric/asymmetric update layer
 ###############################################################################
 
 # !!!It is possible to use less NN calls for more speedup. Do not need message and update NNs, since no aggregation.!!!
 # !!!Need to edit pairwise nn, it uses the same dimension for standard and pairwise.!!!
+
 
 class PairwiseSymAsymLayer(nn.Module):
     """
@@ -650,7 +612,7 @@ class PairwiseSymAsymLayer(nn.Module):
     """
 
     def __init__(self, hidden_nf, act_fn=nn.SiLU()):
-        super(PairwiseSymAsymLayer, self).__init__()
+        super().__init__()
         self.hidden_nf = hidden_nf
 
         # f_s: symmetric MLP. Input: h_s + |h_d| + radial = 2*hidden_nf + 1
@@ -685,7 +647,7 @@ class PairwiseSymAsymLayer(nn.Module):
         h_j = h[cols]
 
         coord_diff = x[rows] - x[cols]
-        radial = (coord_diff ** 2).sum(dim=-1, keepdim=True)
+        radial = (coord_diff**2).sum(dim=-1, keepdim=True)
 
         h_s = h_i + h_j
         h_d = h_i - h_j
@@ -710,17 +672,28 @@ class PairwiseSymAsymLayer(nn.Module):
 # PairwiseEGNN
 ###############################################################################
 
+
 class PairwiseEGNN(nn.Module):
     """
     EGNN variant using pairwise joint updates instead of standard MP.
     Uses the same coloring/scheduling infrastructure but with PairwiseSymAsymLayer.
     """
 
-    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, device='cpu',
-                 act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0,
-                 attention=False, node_attr=1,
-                 frame_ordering='sort_repeat', frame_scoring='atomic_number'):
-        super(PairwiseEGNN, self).__init__()
+    def __init__(
+        self,
+        in_node_nf,
+        in_edge_nf,
+        hidden_nf,
+        device="cpu",
+        act_fn=nn.SiLU(),
+        n_layers=4,
+        coords_weight=1.0,
+        attention=False,
+        node_attr=1,
+        frame_ordering="sort_repeat",
+        frame_scoring="atomic_number",
+    ):
+        super().__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -735,15 +708,25 @@ class PairwiseEGNN(nn.Module):
             self.add_module(f"pairwise_{i}", PairwiseSymAsymLayer(hidden_nf, act_fn))
 
         self.node_dec = nn.Sequential(
-            nn.Linear(hidden_nf, hidden_nf), act_fn,
-            nn.Linear(hidden_nf, hidden_nf))
+            nn.Linear(hidden_nf, hidden_nf), act_fn, nn.Linear(hidden_nf, hidden_nf)
+        )
         self.graph_dec = nn.Sequential(
-            nn.Linear(hidden_nf, hidden_nf), act_fn,
-            nn.Linear(hidden_nf, 1))
+            nn.Linear(hidden_nf, hidden_nf), act_fn, nn.Linear(hidden_nf, 1)
+        )
         self.to(device)
 
-    def forward(self, h0, x, edges, edge_attr, node_mask, edge_mask, n_nodes,
-                charges=None, sparse_edges_per_layer=None):
+    def forward(
+        self,
+        h0,
+        x,
+        edges,
+        edge_attr,
+        node_mask,
+        edge_mask,
+        n_nodes,
+        charges=None,
+        sparse_edges_per_layer=None,
+    ):
         if sparse_edges_per_layer is None:
             raise ValueError("PairwiseEGNN requires sparse_edges_per_layer.")
 
@@ -758,6 +741,7 @@ class PairwiseEGNN(nn.Module):
         h = torch.sum(h, dim=1)
         pred = self.graph_dec(h)
         return pred.squeeze(1)
+
 
 ###############################################################################
 # HybridEGNN (n_standard_layers standard EGNN + n_pairwise_layers pairwise)
@@ -779,12 +763,24 @@ class HybridEGNN(nn.Module):
     so that `assemble_batch_sparse_edges` returns a list of the right length.
     """
 
-    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, pairwise_nf, device='cpu',
-                 act_fn=nn.SiLU(), n_standard_layers=5, n_pairwise_layers=3,
-                 coords_weight=1.0, attention=False, node_attr=1,
-                 frame_ordering='sort_repeat', frame_scoring='atomic_number', 
-                 pairwise_layer_type='sym_asym'):
-        super(HybridEGNN, self).__init__()
+    def __init__(
+        self,
+        in_node_nf,
+        in_edge_nf,
+        hidden_nf,
+        pairwise_nf,
+        device="cpu",
+        act_fn=nn.SiLU(),
+        n_standard_layers=5,
+        n_pairwise_layers=3,
+        coords_weight=1.0,
+        attention=False,
+        node_attr=1,
+        frame_ordering="sort_repeat",
+        frame_scoring="atomic_number",
+        pairwise_layer_type="sym_asym",
+    ):
+        super().__init__()
 
         self.hidden_nf = hidden_nf
         self.pairwise_nf = pairwise_nf
@@ -806,14 +802,16 @@ class HybridEGNN(nn.Module):
             self.add_module(
                 f"gcl_{i}",
                 E_GCL_mask(
-                    hidden_nf, hidden_nf, hidden_nf,
+                    hidden_nf,
+                    hidden_nf,
+                    hidden_nf,
                     edges_in_d=in_edge_nf,
                     nodes_attr_dim=n_node_attr,
                     act_fn=act_fn,
                     recurrent=True,
                     coords_weight=coords_weight,
                     attention=attention,
-                )
+                ),
             )
 
         if hidden_nf != pairwise_nf:
@@ -823,43 +821,38 @@ class HybridEGNN(nn.Module):
 
         # Select pairwise layer architecture
         pairwise_layer_types = {
-        'sym_asym': PairwiseSymAsymLayer,
-        'egcl': PairwiseEGCL,
-        'symmetric': PairwiseSymmetricLayer,
-        'joint': PairwiseJointLayer}
+            "sym_asym": PairwiseSymAsymLayer,
+            "egcl": PairwiseEGCL,
+            "symmetric": PairwiseSymmetricLayer,
+            "joint": PairwiseJointLayer,
+        }
 
         if pairwise_layer_type not in pairwise_layer_types:
             raise ValueError(
-            f"Unknown pairwise_layer_type: {pairwise_layer_type}. "
-            f"Choose from {list(pairwise_layer_types.keys())}.")
+                f"Unknown pairwise_layer_type: {pairwise_layer_type}. "
+                f"Choose from {list(pairwise_layer_types.keys())}."
+            )
 
         pairwise_layer_class = pairwise_layer_types[pairwise_layer_type]
 
         # Pairwise layers after
         for i in range(n_pairwise_layers):
-
-            if pairwise_layer_type == 'egcl':
+            if pairwise_layer_type == "egcl":
                 pairwise_layer = pairwise_layer_class(
-                input_nf=pairwise_nf,
-                output_nf=pairwise_nf,
-                hidden_nf=pairwise_nf,
-                edges_in_d=in_edge_nf,
-                nodes_attr_dim=n_node_attr,
-                act_fn=act_fn,
-                recurrent=True,
-                attention=attention
-            )
+                    input_nf=pairwise_nf,
+                    output_nf=pairwise_nf,
+                    hidden_nf=pairwise_nf,
+                    edges_in_d=in_edge_nf,
+                    nodes_attr_dim=n_node_attr,
+                    act_fn=act_fn,
+                    recurrent=True,
+                    attention=attention,
+                )
 
             else:
-                pairwise_layer = pairwise_layer_class(
-                pairwise_nf,
-                act_fn
-                )
+                pairwise_layer = pairwise_layer_class(pairwise_nf, act_fn)
 
-            self.add_module(
-                f"pairwise_{i}",
-                pairwise_layer
-                )
+            self.add_module(f"pairwise_{i}", pairwise_layer)
 
         self.node_dec = nn.Sequential(
             nn.Linear(pairwise_nf, pairwise_nf),
@@ -874,15 +867,24 @@ class HybridEGNN(nn.Module):
 
         self.to(self.device)
 
-    def forward(self, h0, x, edges, edge_attr, node_mask, edge_mask, n_nodes,
-                charges=None, sparse_edges_per_layer=None):
-
+    def forward(
+        self,
+        h0,
+        x,
+        edges,
+        edge_attr,
+        node_mask,
+        edge_mask,
+        n_nodes,
+        charges=None,
+        sparse_edges_per_layer=None,
+    ):
         if self.n_pairwise_layers > 0:
             if sparse_edges_per_layer is None:
                 raise ValueError("HybridEGNN requires sparse_edges_per_layer for pairwise layers.")
 
-            # FIX: sparse_edges_per_layer must cover ALL layers (standard + pairwise)
-            # so that pairwise layer i reads from index n_standard_layers + i.
+            # The schedule covers both the standard and pairwise layer positions
+            # so pairwise layer i reads from index n_standard_layers + i.
             if len(sparse_edges_per_layer) != self.n_layers:
                 raise ValueError(
                     f"sparse_edges_per_layer must have exactly {self.n_layers} entries "
@@ -897,48 +899,44 @@ class HybridEGNN(nn.Module):
         for i in range(self.n_standard_layers):
             if self.node_attr:
                 h, _, _ = self._modules[f"gcl_{i}"](
-                    h, edges, x, node_mask, edge_mask,
-                    edge_attr=edge_attr, node_attr=h0, n_nodes=n_nodes
+                    h,
+                    edges,
+                    x,
+                    node_mask,
+                    edge_mask,
+                    edge_attr=edge_attr,
+                    node_attr=h0,
+                    n_nodes=n_nodes,
                 )
             else:
                 h, _, _ = self._modules[f"gcl_{i}"](
-                    h, edges, x, node_mask, edge_mask,
-                    edge_attr=edge_attr, node_attr=None, n_nodes=n_nodes
+                    h,
+                    edges,
+                    x,
+                    node_mask,
+                    edge_mask,
+                    edge_attr=edge_attr,
+                    node_attr=None,
+                    n_nodes=n_nodes,
                 )
 
         h = self.hidden_to_pairwise(h)
 
-        # FIX: index pairwise entries starting at n_standard_layers, not 0
+        # Pairwise schedule entries follow the unused standard-layer entries.
         for i in range(self.n_pairwise_layers):
+            sparse_rows, sparse_cols, _ = sparse_edges_per_layer[self.n_standard_layers + i]
 
-            sparse_rows, sparse_cols, _ = sparse_edges_per_layer[
-            self.n_standard_layers + i
-            ]
-
-            if self.pairwise_layer_type == 'egcl':
-
+            if self.pairwise_layer_type == "egcl":
                 if self.node_attr:
-                    h = self._modules[f"pairwise_{i}"](
-                    h,
-                    x,
-                    sparse_rows,
-                    sparse_cols,
-                    node_attr=h0)
-                    
+                    h = self._modules[f"pairwise_{i}"](h, x, sparse_rows, sparse_cols, node_attr=h0)
+
                 else:
                     h = self._modules[f"pairwise_{i}"](
-                    h,
-                    x,
-                    sparse_rows,
-                    sparse_cols,
-                    node_attr=None)
+                        h, x, sparse_rows, sparse_cols, node_attr=None
+                    )
 
             else:
-                h = self._modules[f"pairwise_{i}"](
-                h,
-                x,
-                sparse_rows,
-                sparse_cols)
+                h = self._modules[f"pairwise_{i}"](h, x, sparse_rows, sparse_cols)
 
         h = self.node_dec(h)
         # node_mask must be (total_nodes, 1) to broadcast correctly over hidden_nf
@@ -948,16 +946,28 @@ class HybridEGNN(nn.Module):
         pred = self.graph_dec(h)
         return pred.squeeze(1)
 
+
 ###############################################################################
-# SparseEGNN 
+# SparseEGNN
 ###############################################################################
 
+
 class SparseEGNN(nn.Module):
-    def __init__(self, in_node_nf, in_edge_nf, hidden_nf, device='cpu',
-                 act_fn=nn.SiLU(), n_layers=4, coords_weight=1.0,
-                 attention=False, node_attr=1,
-                 frame_ordering='sort_repeat', frame_scoring='atomic_number'):
-        super(SparseEGNN, self).__init__()
+    def __init__(
+        self,
+        in_node_nf,
+        in_edge_nf,
+        hidden_nf,
+        device="cpu",
+        act_fn=nn.SiLU(),
+        n_layers=4,
+        coords_weight=1.0,
+        attention=False,
+        node_attr=1,
+        frame_ordering="sort_repeat",
+        frame_scoring="atomic_number",
+    ):
+        super().__init__()
         self.hidden_nf = hidden_nf
         self.device = device
         self.n_layers = n_layers
@@ -968,18 +978,40 @@ class SparseEGNN(nn.Module):
         self.embedding = nn.Linear(in_node_nf, hidden_nf)
         n_node_attr = in_node_nf if node_attr else 0
         for i in range(n_layers):
-            self.add_module("gcl_%d" % i, E_GCL_mask(
-                hidden_nf, hidden_nf, hidden_nf, edges_in_d=in_edge_nf,
-                nodes_attr_dim=n_node_attr, act_fn=act_fn, recurrent=True,
-                coords_weight=coords_weight, attention=attention))
-        self.node_dec = nn.Sequential(nn.Linear(hidden_nf, hidden_nf), act_fn,
-                                      nn.Linear(hidden_nf, hidden_nf))
-        self.graph_dec = nn.Sequential(nn.Linear(hidden_nf, hidden_nf), act_fn,
-                                       nn.Linear(hidden_nf, 1))
+            self.add_module(
+                "gcl_%d" % i,
+                E_GCL_mask(
+                    hidden_nf,
+                    hidden_nf,
+                    hidden_nf,
+                    edges_in_d=in_edge_nf,
+                    nodes_attr_dim=n_node_attr,
+                    act_fn=act_fn,
+                    recurrent=True,
+                    coords_weight=coords_weight,
+                    attention=attention,
+                ),
+            )
+        self.node_dec = nn.Sequential(
+            nn.Linear(hidden_nf, hidden_nf), act_fn, nn.Linear(hidden_nf, hidden_nf)
+        )
+        self.graph_dec = nn.Sequential(
+            nn.Linear(hidden_nf, hidden_nf), act_fn, nn.Linear(hidden_nf, 1)
+        )
         self.to(device)
 
-    def forward(self, h0, x, edges, edge_attr, node_mask, edge_mask, n_nodes,
-                charges=None, sparse_edges_per_layer=None):
+    def forward(
+        self,
+        h0,
+        x,
+        edges,
+        edge_attr,
+        node_mask,
+        edge_mask,
+        n_nodes,
+        charges=None,
+        sparse_edges_per_layer=None,
+    ):
         if sparse_edges_per_layer is None:
             raise ValueError("SparseEGNN requires sparse_edges_per_layer.")
         h = self.embedding(h0)
@@ -987,8 +1019,15 @@ class SparseEGNN(nn.Module):
             sparse_rows, sparse_cols, sparse_emask = sparse_edges_per_layer[i]
             node_attr_i = h0 if self.node_attr else None
             h, _, _ = self._modules["gcl_%d" % i](
-                h, [sparse_rows, sparse_cols], x, node_mask, sparse_emask,
-                edge_attr=None, node_attr=node_attr_i, n_nodes=n_nodes)
+                h,
+                [sparse_rows, sparse_cols],
+                x,
+                node_mask,
+                sparse_emask,
+                edge_attr=None,
+                node_attr=node_attr_i,
+                n_nodes=n_nodes,
+            )
         h = self.node_dec(h)
         h = h * node_mask
         h = h.view(-1, n_nodes, self.hidden_nf)
@@ -1002,11 +1041,28 @@ class SparseEGNN(nn.Module):
 ###############################################################################
 
 _ATOMIC_MASS: Dict[int, float] = {
-    1: 1.008, 2: 4.003, 3: 6.941, 4: 9.012, 5: 10.811,
-    6: 12.011, 7: 14.007, 8: 15.999, 9: 18.998, 10: 20.180,
-    11: 22.990, 12: 24.305, 13: 26.982, 14: 28.086, 15: 30.974,
-    16: 32.065, 17: 35.453, 18: 39.948, 19: 39.098, 20: 40.078,
-    35: 79.904, 53: 126.904,
+    1: 1.008,
+    2: 4.003,
+    3: 6.941,
+    4: 9.012,
+    5: 10.811,
+    6: 12.011,
+    7: 14.007,
+    8: 15.999,
+    9: 18.998,
+    10: 20.180,
+    11: 22.990,
+    12: 24.305,
+    13: 26.982,
+    14: 28.086,
+    15: 30.974,
+    16: 32.065,
+    17: 35.453,
+    18: 39.948,
+    19: 39.098,
+    20: 40.078,
+    35: 79.904,
+    53: 126.904,
 }
 _MAX_Z = 100
 
@@ -1031,9 +1087,13 @@ def _node_scores(charges, scoring, mass_table):
     if scoring == "mass":
         return mass
     if scoring == "mass_noh":
-        mass = mass.clone(); mass[z == 1] = 0.0; return mass
+        mass = mass.clone()
+        mass[z == 1] = 0.0
+        return mass
     if scoring == "penalized_h":
-        mass = mass.clone(); mass[z == 1] = -1.0; return mass
+        mass = mass.clone()
+        mass[z == 1] = -1.0
+        return mass
     raise ValueError(f"Unknown frame_scoring='{scoring}'.")
 
 
@@ -1050,7 +1110,9 @@ def _unique_undirected_pairs(edge_index):
         key = (u, v)
         idx = pair_map.get(key)
         if idx is None:
-            idx = len(pairs); pair_map[key] = idx; pairs.append(key)
+            idx = len(pairs)
+            pair_map[key] = idx
+            pairs.append(key)
         edge_to_pair[e] = idx
     return pairs, edge_to_pair
 
@@ -1058,6 +1120,7 @@ def _unique_undirected_pairs(edge_index):
 ###############################################################################
 # Suggestion #1:(Vizing's theorem)
 ###############################################################################
+
 
 def _vizing_heuristic_coloring(pairs):
     """
@@ -1082,13 +1145,13 @@ def _vizing_heuristic_coloring(pairs):
         # Line graph nodes are (u,v) tuples from G's edges
         node_to_pair = {}
         for u, v, data in G.edges(data=True):
-            edge_key = (min(u,v), max(u,v))
-            node_to_pair[edge_key] = data['pair_idx']
+            edge_key = (min(u, v), max(u, v))
+            node_to_pair[edge_key] = data["pair_idx"]
             # Line graph uses frozenset or tuple as node names
-            node_to_pair[(u,v)] = data['pair_idx']
-            node_to_pair[(v,u)] = data['pair_idx']
+            node_to_pair[(u, v)] = data["pair_idx"]
+            node_to_pair[(v, u)] = data["pair_idx"]
 
-        coloring = greedy_color(L, strategy='largest_first')
+        coloring = greedy_color(L, strategy="largest_first")
 
         colors = [-1] * len(pairs)
         for lg_node, color in coloring.items():
@@ -1097,7 +1160,7 @@ def _vizing_heuristic_coloring(pairs):
                 u, v = sorted(lg_node)
             else:
                 u, v = lg_node
-            key = (min(u,v), max(u,v))
+            key = (min(u, v), max(u, v))
             if key in node_to_pair:
                 colors[node_to_pair[key]] = color
 
@@ -1143,16 +1206,17 @@ def _color_masks_single(edge_index, use_vizing=True):
 
 
 ###############################################################################
-# Suggestion #2: mass_product scoring 
+# Suggestion #2: mass_product scoring
 ###############################################################################
 
-def _score_color_classes(color_masks, edge_index, node_scores, scoring_method='additive'):
+
+def _score_color_classes(color_masks, edge_index, node_scores, scoring_method="additive"):
     """
     Score each color class for ordering.
 
     scoring_method:
         'additive': sum of (score_i + score_j) per edge — original
-        'mass_product': sum of (mass_i * mass_j) per edge — suggestion #2
+        'mass_product': sum of (mass_i * mass_j) per edge
     """
     rows, cols = edge_index
     scores = []
@@ -1161,7 +1225,7 @@ def _score_color_classes(color_masks, edge_index, node_scores, scoring_method='a
         if m.sum().item() == 0:
             scores.append(float("-inf"))
             continue
-        if scoring_method == 'mass_product':
+        if scoring_method == "mass_product":
             scores.append((node_scores[rows[m]] * node_scores[cols[m]]).sum().item())
         else:
             scores.append((node_scores[rows[m]] + node_scores[cols[m]]).mean().item())
@@ -1172,30 +1236,34 @@ def _score_color_classes(color_masks, edge_index, node_scores, scoring_method='a
 # Suggestion #3: K/2 repeat scheduling
 ###############################################################################
 
+
 def _sandwich_order(sorted_colors):
     out, lo, hi, take_low = [], 0, len(sorted_colors) - 1, True
     while lo <= hi:
         if take_low:
-            out.append(sorted_colors[lo]); lo += 1
+            out.append(sorted_colors[lo])
+            lo += 1
         else:
-            out.append(sorted_colors[hi]); hi -= 1
+            out.append(sorted_colors[hi])
+            hi -= 1
         take_low = not take_low
     return out
 
 
-def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering,
-                                frame_scoring, mass_table, use_vizing=True):
+def build_frame_schedule_single(
+    edge_index, charges, n_layers, frame_ordering, frame_scoring, mass_table, use_vizing=True
+):
     """
     Build coloring + schedule for a single graph.
 
     frame_ordering options:
         'sort_repeat':     sort colors by score ascending, cycle
-        'half_repeat':     use K/2 colors sorted descending, repeat twice (suggestion #3)
+        'half_repeat':     use K/2 colors sorted descending, repeat twice
         'sandwich_*':      interleave low/high scored colors
 
     frame_scoring options:
         'atomic_number', 'mass', 'mass_noh', 'penalized_h': per-node scores
-        'mass_product': per-edge product scoring (suggestion #2)
+        'mass_product': per-edge product scoring
     """
     scoring_override = {
         "sandwich_atomic": "atomic_number",
@@ -1205,12 +1273,12 @@ def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering,
     }
 
     # Determine node scoring
-    if frame_scoring == 'mass_product':
-        node_scoring = 'mass'
-        color_scoring_method = 'mass_product'
+    if frame_scoring == "mass_product":
+        node_scoring = "mass"
+        color_scoring_method = "mass_product"
     else:
         node_scoring = scoring_override.get(frame_ordering, frame_scoring)
-        color_scoring_method = 'additive'
+        color_scoring_method = "additive"
 
     ns = _node_scores(charges, node_scoring, mass_table)
     color_masks = _color_masks_single(edge_index, use_vizing=use_vizing)
@@ -1220,17 +1288,17 @@ def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering,
 
     scores = _score_color_classes(color_masks, edge_index, ns, color_scoring_method)
 
-    if frame_ordering == 'sort_repeat':
+    if frame_ordering == "sort_repeat":
         sorted_colors = sorted(range(len(scores)), key=lambda c: (scores[c], c))
         base = sorted_colors
 
-    elif frame_ordering == 'half_repeat':
+    elif frame_ordering == "half_repeat":
         # Suggestion #3: use K/2 unique colors, repeat the sequence twice
         # Sort ascending so lightest pairs come first, heaviest come later
         sorted_colors = sorted(range(len(scores)), key=lambda c: (scores[c], c))
         half_k = max(1, n_layers // 2)
         # Take at most half_k colors (or all if fewer available)
-        base_half = sorted_colors[:min(half_k, len(sorted_colors))]
+        base_half = sorted_colors[: min(half_k, len(sorted_colors))]
         # Repeat twice
         schedule = (base_half * 2)[:n_layers]
         return color_masks, schedule
@@ -1249,6 +1317,7 @@ def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering,
 ###############################################################################
 # Precompute + Assembly
 ###############################################################################
+
 
 def precompute_molecule_colorings(
     dataloaders: Dict,
@@ -1269,9 +1338,9 @@ def precompute_molecule_colorings(
 
     for loader in dataloaders.values():
         for data in loader:
-            batch_size, n_nodes, _ = data['positions'].size()
-            charges_batch = data['charges']
-            atom_mask_batch = data['atom_mask']
+            batch_size, n_nodes, _ = data["positions"].size()
+            charges_batch = data["charges"]
+            atom_mask_batch = data["atom_mask"]
 
             for g in range(batch_size):
                 n_real = int(atom_mask_batch[g].sum().item())
@@ -1327,8 +1396,9 @@ def precompute_molecule_colorings(
     return cache
 
 
-def assemble_sparse_edges_cpu(coloring_cache, charges_batch, atom_mask_batch,
-                              n_nodes, n_layers, skip_first=0):
+def assemble_sparse_edges_cpu(
+    coloring_cache, charges_batch, atom_mask_batch, n_nodes, n_layers, skip_first=0
+):
     """Same edge assembly as :func:`assemble_batch_sparse_edges`, but returns CPU
     tensors and never touches CUDA.
 
@@ -1363,9 +1433,11 @@ def assemble_sparse_edges_cpu(coloring_cache, charges_batch, atom_mask_batch,
             if base_rows.numel() == 0:
                 continue
             per_layer_rows[layer_idx].append(
-                (base_rows.unsqueeze(0) + offsets.unsqueeze(1)).reshape(-1))
+                (base_rows.unsqueeze(0) + offsets.unsqueeze(1)).reshape(-1)
+            )
             per_layer_cols[layer_idx].append(
-                (base_cols.unsqueeze(0) + offsets.unsqueeze(1)).reshape(-1))
+                (base_cols.unsqueeze(0) + offsets.unsqueeze(1)).reshape(-1)
+            )
 
     out = []
     for layer_idx in range(n_layers):
@@ -1395,18 +1467,27 @@ class SparseEdgeCollate:
 
     def __call__(self, batch):
         out = self.base_collate(batch)
-        n_nodes = out['charges'].size(1)
+        n_nodes = out["charges"].size(1)
         edges = assemble_sparse_edges_cpu(
-            self.coloring_cache, out['charges'], out['atom_mask'],
-            n_nodes, self.n_layers, self.skip_first)
-        out['sparse_rows'] = [r for r, _ in edges]
-        out['sparse_cols'] = [c for _, c in edges]
+            self.coloring_cache,
+            out["charges"],
+            out["atom_mask"],
+            n_nodes,
+            self.n_layers,
+            self.skip_first,
+        )
+        out["sparse_rows"] = [r for r, _ in edges]
+        out["sparse_cols"] = [c for _, c in edges]
         return out
 
 
 def assemble_batch_sparse_edges(
-    coloring_cache, charges_batch, atom_mask_batch,
-    n_nodes, n_layers, device,
+    coloring_cache,
+    charges_batch,
+    atom_mask_batch,
+    n_nodes,
+    n_layers,
+    device,
 ):
     if charges_batch.dim() == 3 and charges_batch.size(-1) == 1:
         charges_batch = charges_batch.squeeze(-1)

@@ -1,4 +1,30 @@
-/EGNN/qm9/data/raw
-/EGNN/qm9/data/temp
-/EGNN/qm9/data/prepare
-/qm9
+# Python caches and build artifacts
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local environments and editor state
+.venv/
+venv/
+.env
+.idea/
+.vscode/
+.DS_Store
+*.npy
+/EGNN/outputs_vae/
+
+# QM9 downloads, processed data, and experiment output
+/EGNN/data/
+/EGNN/log/
+/EGNN/qm9/data/raw/
+/EGNN/qm9/data/temp/
+/EGNN/qm9/logs/
+/qm9/
