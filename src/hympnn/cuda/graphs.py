@@ -148,7 +148,7 @@ class BucketedCudaGraphRunner:
         )
         self.dense_quantum = _read_capacity(
             "HYMPNN_CUDA_GRAPH_DENSE_QUANTUM",
-            1024,
+            4096,
             legacy_name="EGNN_GRAPH_DENSE_QUANTUM",
         )
         self.sparse_quantum = _read_capacity(
@@ -167,7 +167,7 @@ class BucketedCudaGraphRunner:
             legacy_name="EGNN_GRAPH_SPARSE_LARGE_CAP",
         )
         self.max_buckets = _read_capacity(
-            "HYMPNN_CUDA_GRAPH_MAX_BUCKETS", 16, legacy_name="EGNN_GRAPH_MAX_BUCKETS"
+            "HYMPNN_CUDA_GRAPH_MAX_BUCKETS", 7, legacy_name="EGNN_GRAPH_MAX_BUCKETS"
         )
 
         # Graph replay requires fixed gradient and optimizer-state addresses.
