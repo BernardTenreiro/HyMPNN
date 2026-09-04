@@ -21,6 +21,12 @@ run() {
     local run_directory="$LOG_ROOT/$name"
     local log="$run_directory/train.log"
     local metrics="$run_directory/metrics.json"
+    local graph_buckets=7
+    if [[ "$name" == "hs_projection_128_64" ]]; then
+        # The 128 -> 64 projection/decoder control is only capture-safe for one
+        # shape at a time; uncommon shapes retain fused eager execution.
+        graph_buckets=1
+    fi
 
     if (( ABLATION_INDEX < START_ABLATION || ABLATION_INDEX > END_ABLATION )); then
         return 0
@@ -38,11 +44,12 @@ run() {
         echo "# started  : $(date -Is)"
         echo "# commit   : $(git rev-parse HEAD)"
         echo "# python   : $PYTHON"
+        echo "# graph buckets: $graph_buckets"
         echo "# args     : --output-dir $LOG_ROOT --exp-name $name $*"
         echo "###############################################################"
     } >> "$log"
 
-    "$PYTHON" -u scripts/train_qm9.py \
+    HYMPNN_CUDA_GRAPH_MAX_BUCKETS="$graph_buckets" "$PYTHON" -u scripts/train_qm9.py \
         --output-dir "$LOG_ROOT" --exp-name "$name" "$@" >> "$log" 2>&1
     local status=$?
     echo "# finished : $(date -Is)  exit=$status" >> "$log"
