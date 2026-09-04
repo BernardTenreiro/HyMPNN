@@ -1096,27 +1096,74 @@ def _color_masks_single(edge_index, use_vizing=True):
 # Suggestion #2: mass_product scoring 
 ###############################################################################
 
-def _score_color_classes(color_masks, edge_index, node_scores, scoring_method='additive'):
+def _score_color_classes(
+    color_masks,
+    edge_index,
+    node_scores,
+    positions=None,
+    scoring_method='additive',
+):
     """
     Score each color class for ordering.
 
     scoring_method:
-        'additive': sum of (score_i + score_j) per edge — original
-        'mass_product': sum of (mass_i * mass_j) per edge — suggestion #2
+        'additive':
+            Mean of (score_i + score_j) per edge.
+
+        'mass_product':
+            Sum of (mass_i * mass_j) per edge.
+
+        'mass_product_distance':
+            Sum of (mass_i * mass_j / distance_ij) per edge.
     """
     rows, cols = edge_index
     scores = []
+
     for mask in color_masks:
         m = mask.bool()
+
         if m.sum().item() == 0:
             scores.append(float("-inf"))
             continue
-        if scoring_method == 'mass_product':
-            scores.append((node_scores[rows[m]] * node_scores[cols[m]]).sum().item())
-        else:
-            scores.append((node_scores[rows[m]] + node_scores[cols[m]]).mean().item())
-    return scores
 
+        # !!!can change mean to sum!!!
+        if scoring_method == 'mass_product':
+            score = (
+                node_scores[rows[m]] *
+                node_scores[cols[m]]
+            ).mean().item()
+
+        elif scoring_method == 'mass_product_distance':
+            if positions is None:
+                raise ValueError(
+                    "positions must be provided for "
+                    "'mass_product_distance' scoring."
+                )
+
+            # Pairwise Euclidean distances
+            distances = torch.norm(
+                positions[rows[m]] - positions[cols[m]],
+                dim=-1
+            )
+
+            # Avoid division by zero
+            distances = distances.clamp_min(1e-8)
+
+            score = (
+                node_scores[rows[m]] *
+                node_scores[cols[m]] /
+                distances
+            ).sum().item()
+
+        else:
+            score = (
+                node_scores[rows[m]] +
+                node_scores[cols[m]]
+            ).mean().item()
+
+        scores.append(score)
+
+    return scores
 
 ###############################################################################
 # Suggestion #3: K/2 repeat scheduling
@@ -1133,8 +1180,16 @@ def _sandwich_order(sorted_colors):
     return out
 
 
-def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering,
-                                frame_scoring, mass_table, use_vizing=True):
+def build_frame_schedule_single(
+    edge_index,
+    charges,
+    positions,
+    n_layers,
+    frame_ordering,
+    frame_scoring,
+    mass_table,
+    use_vizing=True
+):
     """
     Build coloring + schedule for a single graph.
 
@@ -1158,6 +1213,11 @@ def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering,
     if frame_scoring == 'mass_product':
         node_scoring = 'mass'
         color_scoring_method = 'mass_product'
+
+    elif frame_scoring == 'mass_product_distance':
+        node_scoring = 'mass'
+        color_scoring_method = 'mass_product_distance'
+
     else:
         node_scoring = scoring_override.get(frame_ordering, frame_scoring)
         color_scoring_method = 'additive'
@@ -1168,7 +1228,13 @@ def build_frame_schedule_single(edge_index, charges, n_layers, frame_ordering,
     if not color_masks:
         raise ValueError("No edges found — cannot build frame schedule.")
 
-    scores = _score_color_classes(color_masks, edge_index, ns, color_scoring_method)
+    scores = _score_color_classes(
+    color_masks,
+    edge_index,
+    ns,
+    positions=positions,
+    scoring_method=color_scoring_method,
+)
 
     if frame_ordering == 'sort_repeat':
         sorted_colors = sorted(range(len(scores)), key=lambda c: (scores[c], c))
@@ -1229,6 +1295,7 @@ def precompute_molecule_colorings(
                     continue
 
                 charges_g = charges_batch[g, :n_real].long().view(-1)
+                positions_g = data['positions'][g, :n_real]
                 cache_key = tuple(charges_g.tolist())
                 if cache_key in cache:
                     continue
@@ -1242,6 +1309,7 @@ def precompute_molecule_colorings(
                 color_masks, schedule = build_frame_schedule_single(
                     edge_index=(local_rows_t, local_cols_t),
                     charges=charges_g,
+                    positions=positions_g,
                     n_layers=n_layers,
                     frame_ordering=frame_ordering,
                     frame_scoring=frame_scoring,

@@ -60,7 +60,7 @@ parser.add_argument('--frame_ordering', type=str, default='sort_repeat',
                          'half_repeat for K/2 repeat (suggestion #3).')
 parser.add_argument('--frame_scoring', type=str, default='atomic_number',
                     choices=['atomic_number', 'mass', 'mass_noh', 'penalized_h',
-                             'mass_product'],
+                             'mass_product', 'mass_product_distance'],
                     help='mass_product: score colors by sum(mass_i * mass_j) (suggestion #2)')
  
 # --- Coloring ---
