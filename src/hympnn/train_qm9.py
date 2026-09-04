@@ -152,6 +152,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     model.add_argument("--n-standard-layers", "--n_standard_layers", type=int, default=5)
     model.add_argument("--n-pairwise-layers", "--n_pairwise_layers", type=int, default=5)
+    model.add_argument(
+        "--n-pairwise-steps",
+        "--n_pairwise_steps",
+        type=int,
+        default=None,
+        help="Scheduled matching steps; defaults to --n-pairwise-layers.",
+    )
 
     scheduling = parser.add_argument_group("sparse edge scheduling")
     scheduling.add_argument(
@@ -200,13 +207,23 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         parser.error("--num-workers cannot be negative")
     if args.n_standard_layers < 0 or args.n_pairwise_layers < 0:
         parser.error("hybrid layer counts cannot be negative")
-    if args.hybrid and args.n_standard_layers + args.n_pairwise_layers == 0:
+    if args.n_pairwise_steps is not None and args.n_pairwise_steps < 0:
+        parser.error("--n-pairwise-steps cannot be negative")
+    pairwise_steps = (
+        args.n_pairwise_layers if args.n_pairwise_steps is None else args.n_pairwise_steps
+    )
+    if pairwise_steps > 0 and args.n_pairwise_layers == 0:
+        parser.error("--n-pairwise-steps requires at least one --n-pairwise-layers")
+    if args.hybrid and args.n_standard_layers + pairwise_steps == 0:
         parser.error("a hybrid model must contain at least one layer")
 
 
 def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
-    uses_sparse_edges = args.hybrid
-    sparse_layer_count = args.n_standard_layers + args.n_pairwise_layers if args.hybrid else 0
+    pairwise_steps = (
+        args.n_pairwise_layers if args.n_pairwise_steps is None else args.n_pairwise_steps
+    )
+    uses_sparse_edges = args.hybrid and pairwise_steps > 0
+    sparse_layer_count = args.n_standard_layers + pairwise_steps if uses_sparse_edges else 0
     pairwise_features = args.nf_sparse if args.nf_sparse is not None else args.nf
 
     shared_options = {
@@ -224,6 +241,7 @@ def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
             pairwise_nf=pairwise_features,
             n_standard_layers=args.n_standard_layers,
             n_pairwise_layers=args.n_pairwise_layers,
+            n_pairwise_steps=pairwise_steps,
             frame_ordering=args.frame_ordering,
             frame_scoring=args.frame_scoring,
             pairwise_layer_type=args.pairwise_layer_type,
@@ -234,7 +252,8 @@ def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
         description = (
             f"Model: {name} | standard_layers={args.n_standard_layers} | "
             f"pairwise_layer_type={args.pairwise_layer_type} | "
-            f"pairwise_layers={args.n_pairwise_layers} | total={sparse_layer_count} | "
+            f"pairwise_layers={args.n_pairwise_layers} | pairwise_steps={pairwise_steps} | "
+            f"total={args.n_standard_layers + pairwise_steps} | "
             f"ordering={args.frame_ordering} | scoring={args.frame_scoring} | "
             f"hidden_nf={args.nf} | pairwise_nf={pairwise_features}"
         )
@@ -259,9 +278,15 @@ def build_model(args: argparse.Namespace, device: torch.device) -> ModelInfo:
 
 
 def default_execution_profile(args: argparse.Namespace) -> ExecutionProfile:
+    pairwise_steps = (
+        args.n_pairwise_layers if args.n_pairwise_steps is None else args.n_pairwise_steps
+    )
     return ExecutionProfile(
         fused_pairwise=(
-            args.hybrid and args.n_pairwise_layers > 0 and args.pairwise_layer_type == "sym_asym"
+            args.hybrid
+            and pairwise_steps > 0
+            and args.n_pairwise_layers > 0
+            and args.pairwise_layer_type == "sym_asym"
         )
     )
 
@@ -373,6 +398,11 @@ def build_architecture_record(
             {
                 "n_standard_layers": args.n_standard_layers,
                 "n_pairwise_layers": args.n_pairwise_layers,
+                "n_pairwise_steps": (
+                    args.n_pairwise_layers
+                    if args.n_pairwise_steps is None
+                    else args.n_pairwise_steps
+                ),
                 "n_sparse_layers": model_info.sparse_layer_count,
             }
         )

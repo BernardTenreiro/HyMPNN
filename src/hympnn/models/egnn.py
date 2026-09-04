@@ -750,17 +750,16 @@ class HybridEGNN(nn.Module):
     """
     Hybrid model:
       - first `n_standard_layers` use standard EGNN message passing
-      - next `n_pairwise_layers` use pairwise updates on scheduled sparse edges
+      - `n_pairwise_layers` learnable pairwise modules are applied over
+        `n_pairwise_steps` scheduled sparse matchings
 
-    `sparse_edges_per_layer` must be a list of length `n_standard_layers +
-    n_pairwise_layers` (i.e. one entry per total layer).  The first
-    `n_standard_layers` entries are ignored by the forward pass (standard layers
-    use the dense `edges` / `edge_mask` arguments instead); the remaining
-    `n_pairwise_layers` entries are consumed by the pairwise layers in order.
+    When the number of pairwise steps exceeds the number of pairwise modules,
+    modules are reused cyclically. This permits a full edge-color sweep without
+    increasing the learned parameter count.
 
-    Callers should build the schedule with:
-        n_layers = n_standard_layers + n_pairwise_layers
-    so that `assemble_batch_sparse_edges` returns a list of the right length.
+    `sparse_edges_per_layer` must contain `n_standard_layers +
+    n_pairwise_steps` entries. The first `n_standard_layers` entries are ignored
+    because standard layers use the dense `edges` / `edge_mask` arguments.
     """
 
     def __init__(
@@ -773,6 +772,7 @@ class HybridEGNN(nn.Module):
         act_fn=nn.SiLU(),
         n_standard_layers=5,
         n_pairwise_layers=3,
+        n_pairwise_steps=None,
         coords_weight=1.0,
         attention=False,
         node_attr=1,
@@ -788,7 +788,12 @@ class HybridEGNN(nn.Module):
         self.device = device
         self.n_standard_layers = n_standard_layers
         self.n_pairwise_layers = n_pairwise_layers
-        self.n_layers = n_standard_layers + n_pairwise_layers
+        self.n_pairwise_steps = (
+            n_pairwise_layers if n_pairwise_steps is None else n_pairwise_steps
+        )
+        if self.n_pairwise_steps > 0 and self.n_pairwise_layers == 0:
+            raise ValueError("pairwise steps require at least one learnable pairwise layer")
+        self.n_layers = n_standard_layers + self.n_pairwise_steps
         self.node_attr = node_attr
         self.frame_ordering = frame_ordering
         self.frame_scoring = frame_scoring
@@ -879,7 +884,7 @@ class HybridEGNN(nn.Module):
         charges=None,
         sparse_edges_per_layer=None,
     ):
-        if self.n_pairwise_layers > 0:
+        if self.n_pairwise_steps > 0:
             if sparse_edges_per_layer is None:
                 raise ValueError("HybridEGNN requires sparse_edges_per_layer for pairwise layers.")
 
@@ -889,7 +894,7 @@ class HybridEGNN(nn.Module):
                 raise ValueError(
                     f"sparse_edges_per_layer must have exactly {self.n_layers} entries "
                     f"(n_standard_layers={self.n_standard_layers} + "
-                    f"n_pairwise_layers={self.n_pairwise_layers}), "
+                    f"n_pairwise_steps={self.n_pairwise_steps}), "
                     f"got {len(sparse_edges_per_layer)}."
                 )
 
@@ -923,20 +928,25 @@ class HybridEGNN(nn.Module):
         h = self.hidden_to_pairwise(h)
 
         # Pairwise schedule entries follow the unused standard-layer entries.
-        for i in range(self.n_pairwise_layers):
-            sparse_rows, sparse_cols, _ = sparse_edges_per_layer[self.n_standard_layers + i]
+        for step in range(self.n_pairwise_steps):
+            layer_index = step % self.n_pairwise_layers
+            sparse_rows, sparse_cols, _ = sparse_edges_per_layer[
+                self.n_standard_layers + step
+            ]
 
             if self.pairwise_layer_type == "egcl":
                 if self.node_attr:
-                    h = self._modules[f"pairwise_{i}"](h, x, sparse_rows, sparse_cols, node_attr=h0)
+                    h = self._modules[f"pairwise_{layer_index}"](
+                        h, x, sparse_rows, sparse_cols, node_attr=h0
+                    )
 
                 else:
-                    h = self._modules[f"pairwise_{i}"](
+                    h = self._modules[f"pairwise_{layer_index}"](
                         h, x, sparse_rows, sparse_cols, node_attr=None
                     )
 
             else:
-                h = self._modules[f"pairwise_{i}"](h, x, sparse_rows, sparse_cols)
+                h = self._modules[f"pairwise_{layer_index}"](h, x, sparse_rows, sparse_cols)
 
         h = self.node_dec(h)
         # node_mask must be (total_nodes, 1) to broadcast correctly over hidden_nf
