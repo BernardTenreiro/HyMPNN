@@ -36,7 +36,7 @@ def download_dataset_qm9(datadir, dataname, splits=None, calculate_thermo=True, 
 
     logging.info('Using existing local QM9 archive.')
 
-    gdb9_tar_data = r"C:\Users\bernt\Desktop\MPNN\EGNN\qm9\data\raw\dsgdb9nsd.xyz.tar.bz2"
+    gdb9_tar_data = r"C:\Users\bernt\OneDrive\Desktop\HyMPNN\qm9\raw\dsgdb9nsd.xyz.tar.bz2"
 
     #urllib.request.urlretrieve(gdb9_url_data, filename=gdb9_tar_data)
     #logging.info('GDB9 dataset downloaded successfully!')
@@ -90,7 +90,7 @@ def gen_splits_gdb9(gdb9dir, cleanup=True):
     gdb9_txt_excluded = join(gdb9dir, 'uncharacterized.txt')
     urllib.request.urlretrieve(gdb9_url_excluded, filename=gdb9_txt_excluded)
 
-    dir = r"C:/Users/bernt/Desktop/MPNN/EGNN/qm9/data/raw/uncharacterized.txt"
+    dir = r"C:\Users\bernt\OneDrive\Desktop\HyMPNN\qm9\raw\uncharacterized.txt"
     # First get list of excluded indices
     excluded_strings = []
     with open(dir) as f:
