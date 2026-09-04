@@ -136,10 +136,6 @@ class BucketedCudaGraphRunner:
         self.eager_fallback_count = 0
         self._reported_fallbacks: set[_GraphBucketKey] = set()
 
-        # Replays are serialized and their outputs are consumed before the next
-        # replay, so all buckets can safely share one private memory pool.
-        self._graph_pool = torch.cuda.graph_pool_handle()
-
         # Tight dense buckets minimize padding. Capture is bounded to common
         # shapes; the rest safely use the eager overflow path. Environment
         # overrides allow capacity studies without editing the source.
@@ -420,7 +416,10 @@ class BucketedCudaGraphRunner:
         # Capture executes the step once. Restore it so the caller's first
         # replay performs exactly one update, matching subsequent cache hits.
         snapshot = self._snapshot_training_state()
-        with torch.cuda.graph(bucket.graph, pool=self._graph_pool):
+        # Each bucket may replay in arbitrary data-dependent order. CUDA graph
+        # pools can only be shared when graphs always replay in capture order,
+        # so every bucket must retain its own private pool.
+        with torch.cuda.graph(bucket.graph):
             self.optimizer.zero_grad(set_to_none=False)
             bucket.loss, bucket.predictions = self._forward_loss(bucket)
             bucket.loss.backward()
